@@ -16,7 +16,7 @@ Hand work to one agent, ask several in parallel, or have them argue it out.
 
 <p align="center">
   <a href="https://pepy.tech/projects/rutherford-mcp-server"><img src="https://static.pepy.tech/personalized-badge/rutherford-mcp-server?period=total&units=NONE&left_color=GREY&right_color=ORANGE&left_text=downloads" alt="PyPI Downloads"></a>
-  <a href="https://github.com/chapmanjw/rutherford-claude-plugin/stargazers"><img src="https://img.shields.io/badge/Star_on-GitHub-181717?logo=github" alt="Star rutherford-claude-plugin on GitHub"></a>
+  <a href="https://github.com/chapmanjw/rutherford-claude-plugin/stargazers"><img src="https://img.shields.io/github/stars/chapmanjw/rutherford-claude-plugin?style=social" alt="GitHub stars"></a>
   <a href="https://pypi.org/project/rutherford-mcp-server/"><img src="https://img.shields.io/pypi/v/rutherford-mcp-server" alt="PyPI version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
@@ -217,13 +217,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md), and [SECUR
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=chapmanjw%2Frutherford-claude-plugin&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=chapmanjw/rutherford-claude-plugin&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=chapmanjw/rutherford-claude-plugin&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=chapmanjw/rutherford-claude-plugin&type=date&legend=top-left" />
- </picture>
-</a>
