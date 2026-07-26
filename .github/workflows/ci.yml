@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Pin the GITHUB_TOKEN ceiling in-repo. The repository default is already read-only, so this
+# changes nothing today; it keeps a future settings flip, or a job added to this file later,
+# from silently gaining write. The validator only reads the checkout.
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest

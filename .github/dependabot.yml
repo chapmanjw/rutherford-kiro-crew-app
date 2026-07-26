@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # The plugin ships no package manifest -- every file is markdown or JSON, and the two Node
+  # scripts have no dependencies -- so github-actions is the only ecosystem to track. Without
+  # this the workflow actions here never receive security updates.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - github-actions
