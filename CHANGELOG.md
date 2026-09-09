@@ -4,6 +4,29 @@ All notable changes to this app are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Config UI read layer completed.** `GET /config` and `GET /status` now surface structured
+  `[agents.*]` tables (`default_model`, `enabled`, per-agent `env`, plus any `extra` keys); `/status`
+  returns a resolved roster with per-agent models instead of only the flat `enabled_agents` list.
+- **`acp.json` folding.** Both the global (beside `config.toml`) and project (`<cwd>/.rutherford/acp.json`)
+  `agent_servers` are surfaced with a scope label and `{path, scope, platform, exists}`.
+- **`RUTHERFORD_*` env overrides** (`RUTHERFORD_CONFIG`, `_MAX_DEPTH`, `_MAX_TARGETS`, `_MAX_CONCURRENCY`,
+  `_DEFAULT_TIMEOUT_S`, `_DEFAULT_SAFETY`, `_TRUSTED_WORKSPACES`, `_ROLE_DIRS`) are reported when set;
+  `RUTHERFORD_CONFIG` is noted as replacing file discovery.
+- **Config write layer (first).** `PUT /config?scope=global|workspace` accepts a JSON body and writes it
+  as `config.toml`. Safety: the serialized TOML must re-parse before any disk write; the prior file is
+  snapshotted to a timestamped `.bak-YYYY-MM-DD`; the write is atomic (temp file in the same dir +
+  `os.replace`); only the resolved global/workspace `config.toml` path is ever written; path traversal is
+  rejected. Comment preservation is intentionally not attempted. GET routes stay read-only.
+- **Editable Config tab** (`ui/src/App.tsx`): `default_safety_mode`, `default_timeout_s`, `max_targets`,
+  `default_persistence`, `auto_detect_local_models`, `synthesize_default`, editable `enabled_agents` /
+  `trusted_workspaces` / `role_dirs` lists, and per-agent `[agents.*]` rows (id / default_model / enabled),
+  with a per-scope Save button that writes and re-fetches, and inline save success/error. Panels and roles
+  remain read-only (next step).
+
 ## [1.0.0] - 2026-09-09
 
 First release of the **Rutherford Kiro Crew app** — a fork/port of the
