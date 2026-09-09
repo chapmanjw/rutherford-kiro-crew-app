@@ -1,0 +1,39 @@
+panels:
+  code-review:
+    description: Senior/Principal-bar code review. Two models review independently, then debate to consensus.
+    strategy: all-voices
+    targets[2]:
+      - cli: claude_code
+        model: opus
+        role: principal-reviewer
+        label: claude-opus
+      - cli: codex
+        model: gpt-5.5
+        role: principal-reviewer
+        label: codex-gpt-5.5
+  design-roundtable:
+    description: Three architects weigh a design question from independent angles. Use with debate.
+    strategy: all-voices
+    targets[3]:
+      - cli: claude_code
+        role: architect
+        label: claude
+      - cli: codex
+        role: architect
+        label: codex
+      - cli: gemini
+        role: architect
+        label: gemini
+  ship-vote:
+    description: A ship / no-ship decision. Each voice returns a verdict; the panel takes a true majority.
+    strategy: majority
+    targets[3]:
+      - cli: claude_code
+        role: principal-reviewer
+        label: claude
+      - cli: codex
+        role: principal-reviewer
+        label: codex
+      - cli: cursor
+        role: principal-reviewer
+        label: cursor

@@ -1,0 +1,33 @@
+.tmp
+
+# Secrets and local env — never commit (this app ships no secrets, kept as defense-in-depth)
+.env
+.env.*
+!.env.example
+
+# Claude Code — per-user settings stay local. (.claude/settings.json is shared and may be committed;
+# this app's configure-permissions skill writes settings.local.json, which must NOT be committed.)
+.claude/settings.local.json
+.claude/*.local.json
+
+# Rutherford runtime working dir, if the server is ever run from this repo (jobs, config, panels).
+# NOTE: examples/ ARE committed app files — do not ignore them.
+.rutherford/
+
+# Research receipts (see the global git-and-commits rules)
+.research/
+
+# Working dirs some agent CLIs drop in the cwd when driven from here
+.antigravitycli/
+.junie/
+
+# Node — the validation script is Node; no dependencies are committed
+node_modules/
+
+# Editor / OS noise and logs
+.DS_Store
+Thumbs.db
+*.swp
+*.log
+.idea/
+.vscode/
