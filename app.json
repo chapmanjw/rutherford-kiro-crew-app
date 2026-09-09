@@ -45,7 +45,7 @@
       {
         "route": "/apps/rutherford",
         "label": "Rutherford",
-        "icon": "Boxes",
+        "icon": "Box",
         "group": "Apps"
       }
     ]

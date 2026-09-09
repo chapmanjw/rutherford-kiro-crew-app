@@ -9,8 +9,7 @@
     "grep",
     "glob",
     "@rutherford:rutherford",
-    "@kirocrew-core/spawn_run",
-    "@kirocrew-core/spawn_list"
+    "@kirocrew-core"
   ],
   "allowedTools": [
     "fs_read",

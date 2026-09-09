@@ -1,7 +1,7 @@
 import { useAppApi } from '@kirocrew/app-sdk'
 import { Card, CardTitle, PageHeader, StatCard } from '@kirocrew/app-sdk/ui'
 import { useState, useEffect, useCallback } from 'react'
-import { Boxes, FileCog, Layers, UserSquare, RefreshCw, AlertTriangle } from 'lucide-react'
+import { Box, FileCog, Layers, UserSquare, RefreshCw, AlertTriangle } from 'lucide-react'
 
 const BASE = '/api/apps/rutherford'
 
@@ -32,8 +32,8 @@ type RolesResp = {
 
 type Tab = 'status' | 'config' | 'panels' | 'roles'
 
-const TABS: { id: Tab; label: string; icon: typeof Boxes }[] = [
-  { id: 'status', label: 'Overview', icon: Boxes },
+const TABS: { id: Tab; label: string; icon: typeof Box }[] = [
+  { id: 'status', label: 'Overview', icon: Box },
   { id: 'config', label: 'Config', icon: FileCog },
   { id: 'panels', label: 'Panels', icon: Layers },
   { id: 'roles', label: 'Roles', icon: UserSquare },

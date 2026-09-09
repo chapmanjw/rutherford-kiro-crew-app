@@ -2,7 +2,7 @@ import { jsxs as r, Fragment as p, jsx as e } from "react/jsx-runtime";
 import { useAppApi as V } from "@kirocrew/app-sdk";
 import { PageHeader as T, StatCard as h, Card as i, CardTitle as d } from "@kirocrew/app-sdk/ui";
 import { useState as o, useCallback as C, useEffect as z } from "react";
-import { Boxes as B, FileCog as j, Layers as F, UserSquare as O, RefreshCw as q, AlertTriangle as G } from "lucide-react";
+import { Box as B, FileCog as j, Layers as F, UserSquare as O, RefreshCw as q, AlertTriangle as G } from "lucide-react";
 const u = "/api/apps/rutherford", H = [
   { id: "status", label: "Overview", icon: B },
   { id: "config", label: "Config", icon: j },
