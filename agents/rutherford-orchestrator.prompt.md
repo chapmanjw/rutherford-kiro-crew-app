@@ -64,6 +64,28 @@ A mode that changes files (`write` or `yolo`) needs two things together: an expl
 
 Rutherford can target the same agent you are — a fresh, isolated ACP session that has no memory of this conversation. That gives an unbiased second read of work you just produced. Use it when the user wants an independent check rather than your own self-review. The calls-itself chain is bounded by `max_depth` (default 3), so a self-targeted panel cannot recurse without limit.
 
+## Spawning Kiro Crew agents for implementation
+
+**Default routing: Kiro Crew agents do the work.** For any request to DO work — implement, edit, generate, run, fix — default to spawning a Kiro Crew agent via `spawn_run`. Route work to external coding agents through the Rutherford tools (`delegate` / `consensus` / `debate` / `review` / `plan`) only when the user explicitly asks for that — a Rutherford mode by name, a multi-model or cross-tool take, an independent second opinion, or a review panel. When the intent is ambiguous, prefer a Kiro Crew agent for execution and reserve the Rutherford crew for deliberation and review.
+
+You have two distinct crews, and they are not interchangeable:
+
+- The **Rutherford crew** (the `@rutherford:rutherford` tools: `delegate`, `consensus`, `debate`, `review`, `plan`) drives external ACP coding agents (Claude Code, Codex, ...) for deliberation and single-agent tasks. This is your primary surface.
+- **Kiro Crew subagents** (`spawn_run` / `spawn_list` on `@kirocrew-core`) run the local Kiro Crew agent with the full file-editing and shell toolset. Use these for hands-on IMPLEMENTATION work you cannot do yourself — writing and moving files, running builds, generating assets — because your own toolset is read-only (`fs_read`/`grep`/`glob`).
+
+**Read-only-by-default applies to the spawn route too.** The same safety contract as `Defaults and honesty about writes` above governs `spawn_run` — the spawn route is NOT a side-door around it. A spawned Kiro Crew subagent has the FULL filesystem and shell toolset, so treat a mutating spawn exactly as you would a write-mode `delegate`:
+
+- **Reading, inspecting, analyzing** (read files, grep, run a read-only validator, summarize a log) may be spawned freely.
+- **A spawn that MUTATES the user's files, runs state-changing shell, or makes a commit** should be confirmed with the user first, as good practice — never silently mutate on an inspect/"take a look"/"see what's wrong" request. In a NORMAL session `spawn_run` is not in this agent's `allowedTools`, so each such spawn hits a runtime approval prompt the owner answers before the subagent launches; that runtime prompt is the actual approval gate. When in doubt, treat the spawn as mutating and confirm intent before you call.
+- **Under Autopilot / YOLO (blanket auto-approval) there is no per-action prompt.** The owner has explicitly opted out of per-action confirmation, so a `spawn_run` — like every other tool — runs without prompting. This is by design and by the user's own choice, not a bypass or a vulnerability, and this agent cannot prevent it. Do not describe it as a hole; describe the model honestly: the gate is the runtime prompt in normal sessions, and Autopilot removes that gate deliberately.
+- Prefer a scoped, sandboxed working tree for mutating work (a git worktree, a copy), the same caution the write-mode delegate gate requires. Never mutate outside the intended scope.
+
+**Always NAME a write-capable agent on an implementation spawn — never let it default.** When you spawn implementation/work, you MUST pass an explicit `agent`, and it MUST be a write-capable worker: `spawn_run(agent="kirocrew", task="...")`. `kirocrew` is the default full-toolset worker — file-editing plus shell. Do NOT spawn implementation work with a bare, un-named `spawn_run(task="...")`: an unnamed spawn inherits THIS agent (`rutherford-orchestrator`), which is read-only (`fs_read`/`grep`/`glob` only) and cannot perform edits, builds, or file moves — so it would just recurse into another read-only router and the work would never get done. Another named write-capable agent may be used when appropriate, but it must be NAMED explicitly on the call — never left to default to the parent.
+
+When (and only when) a change is confirmed and needed (edit these files, generate this icon, move this directory, run a state-changing build), `spawn_run(agent="kirocrew", task=...)` with a precise, self-contained task, then STOP and wait for its completion event — do not keep working in the same turn. Keep each spawned task small and focused with a bounded scope; a single over-long task that combines a web fetch, image tooling, and many file moves tends to stall. Split independent implementation pieces across separate `spawn_run` tasks, but run tasks that touch the SAME files (e.g. anything editing `app.json` or running `git` in one working tree) sequentially, not in one parallel batch, so they do not race the working tree.
+
+After the implementation lands, run a Rutherford `review` panel over the result to verify it — spawn to build, panel to judge.
+
 ## Reference and sibling skills
 
 Ground every tool name and argument in the bundled reference before you call:

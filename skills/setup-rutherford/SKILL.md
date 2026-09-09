@@ -1,9 +1,9 @@
 ---
 name: setup-rutherford
 description: >-
-  Set up and verify Rutherford after installing this plugin: confirm the MCP server is
+  Set up and verify Rutherford after installing this app: confirm the MCP server is
   connected, run doctor to see which coding agents actually drive, scaffold a config.toml,
-  and install any missing npm ACP adapters. Use right after installing the plugin, when
+  and install any missing npm ACP adapters. Use right after installing the app, when
   Rutherford tools are missing, or when the user asks to set up or get started with
   Rutherford.
 ---
@@ -30,8 +30,8 @@ it never replaces a real result or softens a real warning. Full voice, tics, and
 USS Cerritos . Engineering
 ```
 
-Goal: take the user from "plugin installed" to "Rutherford working" in a few checks. Rutherford
-orchestrates other coding agents over ACP; the plugin exposes its capabilities as MCP tools. Work
+Goal: take the user from "app installed" to "Rutherford working" in a few checks. Rutherford
+orchestrates other coding agents over ACP; the app exposes its capabilities as MCP tools. Work
 through the steps below in order and stop as soon as the user has two or more agents that drive.
 
 Cite ground truth from the bundled reference when you need exact argument names:
@@ -39,9 +39,11 @@ Cite ground truth from the bundled reference when you need exact argument names:
 
 ## 1. Confirm the MCP server is live
 
-The plugin auto-registers the server through `~/.kiro/crew/apps/rutherford/.mcp.json`, which launches
-`uvx rutherford-mcp-server`. When the plugin is enabled the server starts on its own; uv fetches the
-package from PyPI on first launch and caches it. No separate install step is needed in the normal case.
+Kiro Crew registers the server from the app's `app.json` `mcpServers` block —
+`"rutherford": { "command": "uvx", "args": ["rutherford-mcp-server"] }` — on `kirocrew app enable`,
+launching it via `uvx rutherford-mcp-server`. When the app is enabled the server starts on its own; uv
+fetches the package from PyPI on first launch and caches it. No separate install step is needed in the
+normal case.
 
 Quickest check: call `capabilities`. If it returns a roster, the server is connected and you can skip
 to step 2.
@@ -49,8 +51,9 @@ to step 2.
 If the Rutherford tools are missing:
 
 - Confirm uv is installed and `uvx` is on PATH. Install uv from https://docs.astral.sh/uv/.
-- Have the user run `/mcp` to see whether the `rutherford` server connected.
-- After enabling the plugin, the client may need a restart or a window reload before the server
+- Have the user check that the `rutherford` MCP server connected (Kiro Crew surfaces the app's MCP
+  servers once the app is enabled).
+- After enabling the app, the client may need a restart or a window reload before the server
   registers.
 
 Fallback when uv is absent or the user prefers an installed entry point: install the package so a

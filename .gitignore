@@ -1,17 +1,17 @@
 .tmp
 
-# Secrets and local env — never commit (this plugin ships no secrets, kept as defense-in-depth)
+# Secrets and local env — never commit (this app ships no secrets, kept as defense-in-depth)
 .env
 .env.*
 !.env.example
 
 # Claude Code — per-user settings stay local. (.claude/settings.json is shared and may be committed;
-# this plugin's configure-permissions skill writes settings.local.json, which must NOT be committed.)
+# this app's configure-permissions skill writes settings.local.json, which must NOT be committed.)
 .claude/settings.local.json
 .claude/*.local.json
 
 # Rutherford runtime working dir, if the server is ever run from this repo (jobs, config, panels).
-# NOTE: the bundled .mcp.json (repo root) and examples/ ARE committed plugin files — do not ignore them.
+# NOTE: examples/ ARE committed app files — do not ignore them.
 .rutherford/
 
 # Research receipts (see the global git-and-commits rules)

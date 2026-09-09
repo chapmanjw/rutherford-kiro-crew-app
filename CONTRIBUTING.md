@@ -1,28 +1,34 @@
 # Contributing
 
-Thanks for helping improve the Rutherford Claude plugin.
+Thanks for helping improve the Rutherford Kiro Crew app.
 
 ## Validate before you push
 
 ```sh
-node scripts/validate-plugin.mjs
+node scripts/validate-app.mjs
 ```
 
-It checks the plugin and marketplace manifests, the bundled `.mcp.json`, and the frontmatter of every
-skill, agent, and command — including that each skill's `name` matches its folder and that the two
-manifest versions stay in lockstep. CI runs the same script on every push and pull request.
+It checks `app.json` (name, semver `version`, `displayName`, description, that every declared agent and
+skill exists on disk, and that a well-formed `rutherford` MCP server is declared and granted to the
+orchestrator app-namespaced as `@rutherford:rutherford`) and the frontmatter of every skill and agent —
+including that each skill's `name` matches its folder. CI runs the same script on every push and pull
+request.
 
 ## Test it locally
 
-Add your working copy as a marketplace and install from it:
+Install your working copy as a Kiro Crew app, grant it trust, then enable it:
 
-```
-/plugin marketplace add /path/to/rutherford-claude-plugin
-/plugin install rutherford@rutherford-claude
+```sh
+kirocrew app install /path/to/rutherford-kiro-crew-app
+# add "rutherford" to agent.apps_trusted in ~/.kiro/crew/config.json (or trust it in the dashboard Settings)
+kirocrew app enable rutherford
 ```
 
-Restart Claude Code, then run `/rutherford:doctor` to confirm the server registered and at least one
-agent drives. Editing a skill or command takes effect after the plugin reloads.
+The trust grant is required: Kiro Crew gates a third-party app's agent and MCP server, so without it
+`enable` registers nothing executable. Once enabled, select the `rutherford-orchestrator` agent and run
+`doctor` to confirm the MCP server registered and at least one agent drives. Editing a skill takes effect
+after the app reloads; manifest, agent, and MCP changes need a re-enable (`kirocrew app disable rutherford`
+then `kirocrew app enable rutherford`).
 
 ## Conventions
 
@@ -32,14 +38,16 @@ agent drives. Editing a skill or command takes effect after the plugin reloads.
   `allowed-tools` frontmatter key.
 - Keep every tool name and argument in step with [`reference/tools.md`](reference/tools.md), the source
   of truth the skills cite. If the server changes a tool, update the reference first.
-- Reference bundled files with `${CLAUDE_PLUGIN_ROOT}/...`.
+- Reference bundled docs from a skill with `~/.kiro/crew/apps/rutherford/...`, the path an installed app
+  unpacks to.
 - Writing style: direct and specific, no AI tropes (no "not X, it's Y" reframes, no bold-first bullets,
   sparing em dashes), straight quotes, ASCII arrows.
 
 ## Changes and releases
 
-This repo follows a simple flow: commit to the default branch, keep `plugin.json` and `marketplace.json`
-versions in lockstep, and add a dated entry to [`CHANGELOG.md`](CHANGELOG.md). Tag a release `vX.Y.Z`.
+Commit to the default branch. The version for the Kiro Crew surface lives in `app.json` — the sole
+version source of truth, validated by `scripts/validate-app.mjs`. Add a dated entry to
+[`CHANGELOG.md`](CHANGELOG.md) and tag a release `vX.Y.Z`.
 
 For the orchestration engine itself (tools, agents, safety model), open issues and PRs against
 [rutherford-mcp-server](https://github.com/chapmanjw/rutherford-mcp-server).

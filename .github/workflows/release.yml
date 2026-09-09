@@ -1,14 +1,13 @@
 name: Release
 
-# The plugin is distributed as a Claude Code marketplace (Claude reads
-# .claude-plugin/marketplace.json straight from the repo), so there is nothing to
-# publish to a package registry. This workflow turns a pushed version tag into a
-# visible GitHub Release with the changelog notes, after re-running the validator
-# and enforcing that the tag matches the manifest version.
+# This is a Kiro Crew app distributed by install-from-source — `kirocrew app install <path>`
+# from a clone of this git repo (or via an external registry that points at the repo). There is
+# no package registry to publish to. This workflow only turns a pushed version tag into a visible
+# GitHub Release with the changelog notes, after re-running the validator and enforcing that the
+# tag matches the app.json manifest version.
 #
-# Release flow: bump .claude-plugin/{plugin,marketplace}.json (lockstep) + add a
-# dated CHANGELOG section, commit to main, then `git tag vX.Y.Z && git push --tags`.
-# This runs on the tag.
+# Release flow: bump app.json (the sole version source of truth) + add a dated CHANGELOG section,
+# commit to main, then `git tag vX.Y.Z && git push --tags`. This runs on the tag.
 
 on:
   push:
@@ -31,19 +30,19 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Validate plugin, manifests, skills, agents, commands, and references
-        run: node scripts/validate-plugin.mjs
+      - name: Validate app manifest, skills, and agents
+        run: node scripts/validate-app.mjs
 
       - name: Verify the tag matches the manifest version
         run: |
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
-          manifest=$(node -p "require('./.claude-plugin/plugin.json').version")
+          manifest=$(node -p "require('./app.json').version")
           if [ "$version" != "$manifest" ]; then
-            echo "::error::Tag $tag (version $version) does not match plugin.json version $manifest — bump the manifests before tagging."
+            echo "::error::Tag $tag (version $version) does not match app.json version $manifest — bump the manifest before tagging."
             exit 1
           fi
-          echo "tag $tag matches plugin.json version $manifest"
+          echo "tag $tag matches app.json version $manifest"
 
       # Notes go to a FILE, not a step output. Writing them through $GITHUB_OUTPUT needs a heredoc
       # delimiter, and a fixed one is forgeable by a changelog line that happens to equal it. A file
@@ -65,6 +64,33 @@ jobs:
             exit 1
           fi
 
+      # Derive the GitHub Release `prerelease` flag from the PRESENCE of a SemVer prerelease
+      # component, not from an allowlist of labels. The manifest validator's SEMVER accepts ANY
+      # prerelease identifier (e.g. 1.0.1-preview.1, 1.0.1-next.3), so keying off -rc/-alpha/-beta
+      # alone would publish a tag like v1.0.1-preview.1 as a STABLE release.
+      #
+      # SemVer grammar: MAJOR.MINOR.PATCH[-prerelease][+build]. The prerelease component is the
+      # `-<identifiers>` that follows PATCH and precedes any `+build`. So:
+      #   1. strip the leading `v`,
+      #   2. drop any `+build` metadata (a `-` inside build metadata is NOT a prerelease marker),
+      #   3. prerelease is present iff what remains still contains a `-`.
+      # Shell-injection-safe: the tag is read from the $GITHUB_REF_NAME environment variable, never
+      # spliced in via ${{ }} interpolation in a run: block.
+      - name: Determine prerelease flag
+        id: prerelease
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"          # strip leading v: v1.0.1-preview.1 -> 1.0.1-preview.1
+          core="${version%%+*}"       # drop +build metadata: 1.0.1-preview.1+ci -> 1.0.1-preview.1
+          if [ "$core" != "${core#*-}" ]; then
+            # A '-' survives after removing build metadata => a prerelease component is present.
+            echo "value=true" >> "$GITHUB_OUTPUT"
+            echo "tag $tag has a SemVer prerelease component -> prerelease=true"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+            echo "tag $tag is a stable release -> prerelease=false"
+          fi
+
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -72,4 +98,4 @@ jobs:
           name: ${{ github.ref_name }}
           body_path: notes.md
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
+          prerelease: ${{ steps.prerelease.outputs.value }}

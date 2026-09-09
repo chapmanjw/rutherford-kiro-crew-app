@@ -8,12 +8,15 @@
     "fs_read",
     "grep",
     "glob",
-    "@rutherford:rutherford"
+    "@rutherford:rutherford",
+    "@kirocrew-core/spawn_run",
+    "@kirocrew-core/spawn_list"
   ],
   "allowedTools": [
     "fs_read",
     "grep",
-    "glob"
+    "glob",
+    "@kirocrew-core/spawn_list"
   ],
   "resources": [
     "skill://~/.kiro/crew/skills/rutherford/*/SKILL.md"
