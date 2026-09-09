@@ -17,7 +17,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -35,11 +35,11 @@ orchestrates other coding agents over ACP; the plugin exposes its capabilities a
 through the steps below in order and stop as soon as the user has two or more agents that drive.
 
 Cite ground truth from the bundled reference when you need exact argument names:
-`${CLAUDE_PLUGIN_ROOT}/reference/tools.md` and `${CLAUDE_PLUGIN_ROOT}/reference/config.md`.
+`~/.kiro/crew/apps/rutherford/reference/tools.md` and `~/.kiro/crew/apps/rutherford/reference/config.md`.
 
 ## 1. Confirm the MCP server is live
 
-The plugin auto-registers the server through `${CLAUDE_PLUGIN_ROOT}/.mcp.json`, which launches
+The plugin auto-registers the server through `~/.kiro/crew/apps/rutherford/.mcp.json`, which launches
 `uvx rutherford-mcp-server`. When the plugin is enabled the server starts on its own; uv fetches the
 package from PyPI on first launch and caches it. No separate install step is needed in the normal case.
 
@@ -122,7 +122,7 @@ It never clobbers an existing file. Pick the scope with `scope`:
 - `setup(write=true, scope="project")` (default) writes into the project, for per-repo settings.
 - `setup(write=true, scope="global")` writes the user-wide config.
 
-Project paths and the global path are listed in `${CLAUDE_PLUGIN_ROOT}/reference/config.md`. Note that
+Project paths and the global path are listed in `~/.kiro/crew/apps/rutherford/reference/config.md`. Note that
 `config.toml` and role changes take effect on **server restart** (reconnect the MCP server from the
 client); panels hot-reload via `reload_panels` and do not need a restart.
 
@@ -136,7 +136,7 @@ the `.rutherford` directories (home and project) plus the config and inspection 
 `discover`, `reload_panels`, `doctor`, and the readers).
 
 It leaves the agent-spawning tools (`delegate`, `consensus`, `debate`) prompting unless the user opts in,
-and it does not weaken Rutherford's own write gate. See `${CLAUDE_PLUGIN_ROOT}/reference/permissions.md`.
+and it does not weaken Rutherford's own write gate. See `~/.kiro/crew/apps/rutherford/reference/permissions.md`.
 
 ## 6. No paid agent subscription
 

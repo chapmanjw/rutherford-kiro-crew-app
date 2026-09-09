@@ -15,7 +15,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -32,8 +32,8 @@ Rutherford ships 19 built-in agents but only the ones installed and signed in on
 Run `capabilities` for the roster snapshot and `doctor` to see which actually answer. When the user wants
 a voice that is not there, pick one of the three paths below.
 
-For ground truth on every argument, read `${CLAUDE_PLUGIN_ROOT}/reference/tools.md` and
-`${CLAUDE_PLUGIN_ROOT}/reference/config.md`. Do not invent argument names.
+For ground truth on every argument, read `~/.kiro/crew/apps/rutherford/reference/tools.md` and
+`~/.kiro/crew/apps/rutherford/reference/config.md`. Do not invent argument names.
 
 ## 1. Discover registry agents
 
@@ -82,7 +82,7 @@ an explicit `backend` + `model` is the way to control exactly which model and ho
 
 ## 3. Define an agent by hand
 
-Edit the config file directly (see `${CLAUDE_PLUGIN_ROOT}/reference/config.md` for where it lives per
+Edit the config file directly (see `~/.kiro/crew/apps/rutherford/reference/config.md` for where it lives per
 scope, or run `setup` to scaffold a starter `config.toml`). An `[agents.<id>]` section does one of three
 things depending on the id:
 

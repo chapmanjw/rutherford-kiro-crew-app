@@ -13,7 +13,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -36,8 +36,8 @@ Use this skill when the user wants to define, rename, or change a saved panel; a
 a panel's models, per-seat roles, stances, or weights; pick the aggregation strategy; or list what panels
 exist. For one-off groupings, pass `targets` inline instead and skip the file.
 
-For ground truth while editing, read `${CLAUDE_PLUGIN_ROOT}/reference/panels.md` and the starter at
-`${CLAUDE_PLUGIN_ROOT}/examples/panels.toon`.
+For ground truth while editing, read `~/.kiro/crew/apps/rutherford/reference/panels.md` and the starter at
+`~/.kiro/crew/apps/rutherford/examples/panels.toon`.
 
 ## Where panels.toon lives
 
@@ -48,7 +48,7 @@ The file is named `panels.toon` and is discovered across three scopes, lowest pr
 3. `$RUTHERFORD_CONFIG_DIR/panels.toon` — an explicit directory; overrides both.
 
 Panels merge by name, the closest scope winning. The file is TOON. Note this is a separate discovery
-from `config.toml` (see `${CLAUDE_PLUGIN_ROOT}/reference/config.md`) — panels do not live in the config
+from `config.toml` (see `~/.kiro/crew/apps/rutherford/reference/config.md`) — panels do not live in the config
 file. Edit the global file when the panel should follow the user everywhere; edit the project file when
 it belongs to one repo.
 
@@ -111,7 +111,7 @@ outcome.
 
 1. Open the right `panels.toon` for the scope (create it if missing; start the file with the
    `panels:` line).
-2. Copy a block from `${CLAUDE_PLUGIN_ROOT}/examples/panels.toon` and edit it: rename the panel, set each
+2. Copy a block from `~/.kiro/crew/apps/rutherford/examples/panels.toon` and edit it: rename the panel, set each
    seat's `cli` / `model` / `role` / `label`, and pick `strategy`. Keep the `targets[N]:` count in sync
    with the number of seats you write.
 3. Save, then call `reload_panels()` to validate and load from disk. No server restart is needed.

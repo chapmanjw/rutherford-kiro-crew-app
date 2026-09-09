@@ -1,0 +1,51 @@
+{
+  "name": "rutherford",
+  "version": "0.2.4",
+  "displayName": "Rutherford",
+  "description": "Give your AI coding agent a crew. Registers the Rutherford MCP server and ships skills plus an orchestrator agent to delegate, reach consensus, debate, review, and plan across Claude Code, Codex, Cursor, Goose, and more over the Agent Client Protocol.",
+  "author": "chapmanjw",
+  "license": "MIT",
+  "tags": [
+    "mcp",
+    "rutherford",
+    "acp",
+    "agent-orchestration",
+    "consensus",
+    "code-review",
+    "multi-agent"
+  ],
+  "agents": [
+    "agents/rutherford-orchestrator.json"
+  ],
+  "skills": [
+    "skills/setup-rutherford",
+    "skills/configure-panels",
+    "skills/configure-defaults",
+    "skills/configure-roles",
+    "skills/add-agents",
+    "skills/configure-permissions",
+    "skills/troubleshoot-connection",
+    "skills/delegate-task",
+    "skills/multi-agent-consensus",
+    "skills/agent-debate",
+    "skills/code-review-panel",
+    "skills/background-jobs",
+    "skills/safe-write-delegation"
+  ],
+  "mcpServers": {
+    "rutherford": {
+      "command": "uvx",
+      "args": ["rutherford-mcp-server"]
+    }
+  },
+  "dependencies": {
+    "managedBy": "app",
+    "commands": ["uvx"]
+  },
+  "platform": {
+    "os": ["macos", "linux", "windows"]
+  },
+  "permissions": {
+    "network": true
+  }
+}

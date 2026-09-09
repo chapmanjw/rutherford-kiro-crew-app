@@ -16,7 +16,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -53,7 +53,7 @@ Edit the project file for a single repo, the global file for machine-wide defaul
 ## The settings you will actually touch
 
 Read these one-liners, then edit the matching key. Values shown are the defaults from
-`${CLAUDE_PLUGIN_ROOT}/examples/config.toml`.
+`~/.kiro/crew/apps/rutherford/examples/config.toml`.
 
 - `enabled_agents` -- allowlist that restricts the registry, e.g. `["claude_code", "codex", "goose"]`. Omit it to enable every built-in plus any configured agent.
 - `default_safety_mode` -- posture a call adopts when it names none: `read_only` (default) | `propose` | `write` | `yolo`. `write`/`yolo` need a trusted workspace (see below).
@@ -69,7 +69,7 @@ Read these one-liners, then edit the matching key. Values shown are the defaults
 
 For the full schema, including `max_depth`, `max_concurrency`, `max_debate_rounds`,
 `min_quorum`, `verify_read_only`, and the time-budget knobs, read
-`${CLAUDE_PLUGIN_ROOT}/reference/config.md`.
+`~/.kiro/crew/apps/rutherford/reference/config.md`.
 
 ## How to write the file
 
@@ -90,7 +90,7 @@ setup(scope="project", write=true, trust_workspace=true)
 
 After scaffolding, open the written `config.toml` and edit the keys you need. To edit an
 existing config, just change the file directly -- the example at
-`${CLAUDE_PLUGIN_ROOT}/examples/config.toml` is a good template to copy keys from.
+`~/.kiro/crew/apps/rutherford/examples/config.toml` is a good template to copy keys from.
 
 ## Changes take effect on restart
 

@@ -15,7 +15,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -60,7 +60,7 @@ You are reviewing code at the bar of a Senior or Principal Software Engineer...
 (the rest of the body is the system prompt the agent receives)
 ```
 
-Frontmatter keys: `name` (the id; kebab-case, must match how callers reference it), `description`, and the optional `display_name`. Everything after the frontmatter is the prompt text. The shipped `${CLAUDE_PLUGIN_ROOT}/examples/roles/principal-reviewer.md` is the model to copy from — it shows the depth and structure a strong role carries (priority-ordered inspection dimensions, an output format, a cross-review protocol).
+Frontmatter keys: `name` (the id; kebab-case, must match how callers reference it), `description`, and the optional `display_name`. Everything after the frontmatter is the prompt text. The shipped `~/.kiro/crew/apps/rutherford/examples/roles/principal-reviewer.md` is the model to copy from — it shows the depth and structure a strong role carries (priority-ordered inspection dimensions, an output format, a cross-review protocol).
 
 ## Where roles live and which one wins
 
@@ -90,7 +90,7 @@ A call or panel that references a role the running server has not loaded fails w
 
 ```
 mkdir -p ~/.rutherford/roles
-cp ${CLAUDE_PLUGIN_ROOT}/examples/roles/principal-reviewer.md ~/.rutherford/roles/house-reviewer.md
+cp ~/.kiro/crew/apps/rutherford/examples/roles/principal-reviewer.md ~/.rutherford/roles/house-reviewer.md
 ```
 
 2. Edit `~/.rutherford/roles/house-reviewer.md`: set `name: house-reviewer` in the frontmatter (the id must match the filename intent and how you will call it), then adjust the body to your house standard.

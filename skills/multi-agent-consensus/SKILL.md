@@ -15,7 +15,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -33,7 +33,7 @@ opinion, a cross-model answer, or a vote across agents. The tool is `consensus`.
 its own ACP session concurrently; the panel returns every voice, or one aggregated verdict if you pass
 a `strategy`.
 
-Ground truth for argument names and defaults is `${CLAUDE_PLUGIN_ROOT}/reference/tools.md`. Read it if
+Ground truth for argument names and defaults is `~/.kiro/crew/apps/rutherford/reference/tools.md`. Read it if
 anything here is ambiguous rather than guessing a name.
 
 ## The minimal call
@@ -131,7 +131,7 @@ quorum it returns `BUDGET_EXHAUSTED`. `on_budget` is `harvest`, `continue`, or `
 Consensus is read-only deliberation. A `safety_mode` beyond `read_only` (`propose`, `write`, `yolo`) is
 refused — there is no coherent way to merge edits from several agents into one tree. Route any write or
 propose work through `delegate`, a single agent isolated in a worktree sandbox. See
-`${CLAUDE_PLUGIN_ROOT}/reference/safety.md`.
+`~/.kiro/crew/apps/rutherford/reference/safety.md`.
 
 ## Reusing a saved crew
 
@@ -144,7 +144,7 @@ consensus(panel="code-review", prompt="Review the change in the provided files."
 consensus(panel="code-review", panel_overrides={"strategy": "unanimous"}, prompt="Ship verdict?")
 ```
 
-See `${CLAUDE_PLUGIN_ROOT}/reference/panels.md` and the configure-panels skill for defining one.
+See `~/.kiro/crew/apps/rutherford/reference/panels.md` and the configure-panels skill for defining one.
 
 ## Worked examples
 

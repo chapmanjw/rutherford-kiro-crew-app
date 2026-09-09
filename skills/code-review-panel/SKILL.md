@@ -13,7 +13,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -30,9 +30,9 @@ Multiple coding agents review the same change at a principal bar, so a defect on
 misses another tends to catch. Three depths, all read-only. Pick by what the user wants:
 a fast independent read, a review that argues to consensus, or a single ship/no-ship vote.
 
-Ground truth for every argument name and default is `${CLAUDE_PLUGIN_ROOT}/reference/tools.md`.
-Read it if you are unsure. The reviewer persona is `${CLAUDE_PLUGIN_ROOT}/examples/roles/principal-reviewer.md`
-and the panels that back these calls are in `${CLAUDE_PLUGIN_ROOT}/examples/panels.toon`.
+Ground truth for every argument name and default is `~/.kiro/crew/apps/rutherford/reference/tools.md`.
+Read it if you are unsure. The reviewer persona is `~/.kiro/crew/apps/rutherford/examples/roles/principal-reviewer.md`
+and the panels that back these calls are in `~/.kiro/crew/apps/rutherford/examples/panels.toon`.
 
 ## When to use which depth
 
@@ -101,8 +101,8 @@ Read it back with:
     job_result(job_id="<id>")   # the full transcript + consensus report
 
 This depth depends on the `code-review` panel and the `principal-reviewer` role existing in the
-user's config. Both ship as examples (`${CLAUDE_PLUGIN_ROOT}/examples/panels.toon` and
-`${CLAUDE_PLUGIN_ROOT}/examples/roles/`). If a call fails because the panel or role is unknown,
+user's config. Both ship as examples (`~/.kiro/crew/apps/rutherford/examples/panels.toon` and
+`~/.kiro/crew/apps/rutherford/examples/roles/`). If a call fails because the panel or role is unknown,
 the user has not installed them yet — point them at [configure-panels](configure-panels) to add
 the panel (then `reload_panels`) and [configure-roles](configure-roles) to add the persona (a
 role needs a server restart, a panel does not).

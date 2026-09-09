@@ -13,7 +13,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -28,8 +28,8 @@ USS Cerritos . Engineering
 
 `delegate` is the one path that edits code. When the user wants an agent to apply a fix, make a
 change, or implement something rather than just inspect or plan, route it through `delegate` with a
-mutating `safety_mode`. Read `${CLAUDE_PLUGIN_ROOT}/reference/safety.md` and
-`${CLAUDE_PLUGIN_ROOT}/reference/tools.md` for the authoritative argument list.
+mutating `safety_mode`. Read `~/.kiro/crew/apps/rutherford/reference/safety.md` and
+`~/.kiro/crew/apps/rutherford/reference/tools.md` for the authoritative argument list.
 
 ## When to use
 

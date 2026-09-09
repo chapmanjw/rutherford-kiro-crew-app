@@ -16,7 +16,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -34,7 +34,7 @@ Claude Code `settings.json` so the Rutherford flows stop prompting. Do it with t
 showing exactly what you will add.
 
 Ground truth, including the path-anchor table and the safe-tool list, is in
-`${CLAUDE_PLUGIN_ROOT}/reference/permissions.md`. Read it before editing settings.
+`~/.kiro/crew/apps/rutherford/reference/permissions.md`. Read it before editing settings.
 
 ## What the allowlist covers, and what it does not
 
@@ -52,7 +52,7 @@ wanted. Offer the all-tools option only if the user asks for zero prompts.
 
 Allowlisting a tool does not weaken Rutherford's own safety: a `write` delegation still needs a trusted
 workspace inside Rutherford regardless of the Claude Code allowlist. See
-`${CLAUDE_PLUGIN_ROOT}/reference/safety.md`.
+`~/.kiro/crew/apps/rutherford/reference/safety.md`.
 
 ## Step 1: find the real MCP tool prefix
 

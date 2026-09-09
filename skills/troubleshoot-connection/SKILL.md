@@ -13,7 +13,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -28,8 +28,8 @@ USS Cerritos . Engineering
 
 Use this when an agent will not run: a `delegate` errors, `doctor` flags something,
 or a `consensus`/`debate` panel comes back with failed voices. Ground-truth tool
-names and arguments are in `${CLAUDE_PLUGIN_ROOT}/reference/tools.md`; config paths
-are in `${CLAUDE_PLUGIN_ROOT}/reference/config.md`.
+names and arguments are in `~/.kiro/crew/apps/rutherford/reference/tools.md`; config paths
+are in `~/.kiro/crew/apps/rutherford/reference/config.md`.
 
 Work the tree top to bottom. Each step narrows the cause.
 
@@ -130,7 +130,7 @@ suggestion is a good candidate). `ANTHROPIC_CUSTOM_MODEL_OPTION` is the value th
 an enforced model allowlist, where `ANTHROPIC_MODEL` alone is rewritten back to the rejected
 alias. Reconnect the server (config is read once at start), then re-run
 `doctor(agent="claude_code")`. Approaches that do NOT work, and the full mechanism, are in
-the server's `docs/bedrock.md`. See `add-agents` and `${CLAUDE_PLUGIN_ROOT}/reference/config.md`
+the server's `docs/bedrock.md`. See `add-agents` and `~/.kiro/crew/apps/rutherford/reference/config.md`
 for the `[agents.<id>.env]` feature.
 
 ### error

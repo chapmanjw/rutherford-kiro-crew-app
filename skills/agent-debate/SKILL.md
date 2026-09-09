@@ -16,7 +16,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -42,7 +42,7 @@ debate(
 )
 ```
 
-Each `targets` entry is a `cli` string (`"codex"`), a `cli:model` string (`"codex:gpt-5.5"`), or an object `{"cli": "claude_code", "model": "opus"}` that may also carry per-seat `role`, `label`, `weight`, `parity`, and `stance`. Argument names match reference/tools.md; when unsure, read `${CLAUDE_PLUGIN_ROOT}/reference/tools.md` rather than guessing.
+Each `targets` entry is a `cli` string (`"codex"`), a `cli:model` string (`"codex:gpt-5.5"`), or an object `{"cli": "claude_code", "model": "opus"}` that may also carry per-seat `role`, `label`, `weight`, `parity`, and `stance`. Argument names match reference/tools.md; when unsure, read `~/.kiro/crew/apps/rutherford/reference/tools.md` rather than guessing.
 
 ## How a debate runs
 
@@ -61,7 +61,7 @@ Each voice keeps ONE persistent ACP session for the whole debate. Round one is e
 
 ## Read-only only
 
-A debate is read-only deliberation. The voices run on persistent sessions in the working directory with no per-turn sandbox, so a mutating `safety_mode` (`propose` / `write` / `yolo`) is refused. Route any write or propose work through `delegate`, which isolates a single agent in a worktree sandbox. See `${CLAUDE_PLUGIN_ROOT}/reference/safety.md`.
+A debate is read-only deliberation. The voices run on persistent sessions in the working directory with no per-turn sandbox, so a mutating `safety_mode` (`propose` / `write` / `yolo`) is refused. Route any write or propose work through `delegate`, which isolates a single agent in a worktree sandbox. See `~/.kiro/crew/apps/rutherford/reference/safety.md`.
 
 ## Panels and async
 

@@ -1,0 +1,21 @@
+{
+  "name": "rutherford-orchestrator",
+  "displayName": "Rutherford Orchestrator",
+  "description": "Routes a request to the right Rutherford mode — delegate, consensus, debate, review, or plan — after health-checking the crew with doctor. Use when the user wants to use Rutherford for a task without naming a specific mode, or wants a fresh, independent multi-agent take on their own work. Requires the Rutherford MCP server.",
+  "model": "auto",
+  "prompt": "file://~/.kiro/crew/apps/rutherford/agents/rutherford-orchestrator.prompt.md",
+  "tools": [
+    "fs_read",
+    "grep",
+    "glob",
+    "@rutherford"
+  ],
+  "allowedTools": [
+    "fs_read",
+    "grep",
+    "glob"
+  ],
+  "resources": [
+    "skill://~/.kiro/crew/skills/rutherford/*/SKILL.md"
+  ]
+}

@@ -13,7 +13,7 @@ his cheery, eager-to-help voice without repeating the full banner, including whe
 Rutherford tool returned. He is Ensign Sam Rutherford (USS
 Cerritos engineering, *Star Trek: Lower Decks*). The persona is flavor on top of accurate, honest work —
 it never replaces a real result or softens a real warning. Full voice, tics, and quotes:
-`${CLAUDE_PLUGIN_ROOT}/reference/persona.md`.
+`~/.kiro/crew/apps/rutherford/reference/persona.md`.
 
 ```
 .---------.
@@ -29,8 +29,8 @@ USS Cerritos . Engineering
 Use this when the user wants exactly one coding agent to read, explain, or analyze
 something. One agent, one prompt, one normalized result.
 
-For ground-truth argument names and defaults, read `${CLAUDE_PLUGIN_ROOT}/reference/tools.md`
-(the `delegate` section) and `${CLAUDE_PLUGIN_ROOT}/reference/safety.md`.
+For ground-truth argument names and defaults, read `~/.kiro/crew/apps/rutherford/reference/tools.md`
+(the `delegate` section) and `~/.kiro/crew/apps/rutherford/reference/safety.md`.
 
 ## The minimal call
 
