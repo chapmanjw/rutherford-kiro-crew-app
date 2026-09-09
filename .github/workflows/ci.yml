@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Pin the GITHUB_TOKEN ceiling in-repo. The repository default is already read-only, so this
+# changes nothing today; it keeps a future settings flip, or a job added to this file later,
+# from silently gaining write. The validator only reads the checkout.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+      - name: Validate plugin, manifests, skills, agents, and commands
+        run: node scripts/validate-plugin.mjs
+
+      # validate-plugin.mjs never parses a workflow file, and CodeQL's actions analysis runs only on
+      # main -- so release.yml, which holds contents: write and executes only on a pushed tag, had no
+      # pre-merge checking at all. actionlint catches YAML errors, invalid ${{ }} expressions, unknown
+      # contexts, and bad runs-on values in about a second.
+      #
+      # Pinned version + checksum on purpose. The upstream install script is fetched from a mutable
+      # branch ref, which is the same floating-supply-chain problem the SHA-pinned `uses:` lines above
+      # exist to avoid; a linter that guards the release workflow should not be the weakest link in it.
+      - name: Lint workflows (actionlint)
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict -
+          tar -xzf "$archive" actionlint
+          ./actionlint -color

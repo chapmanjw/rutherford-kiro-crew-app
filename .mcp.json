@@ -1,0 +1,13 @@
+{
+  "//": "Auto-loaded when the plugin is enabled. It registers the Rutherford MCP server",
+  "//1": "as a local stdio process launched with uvx, so no separate install step is needed:",
+  "//2": "uv fetches rutherford-mcp-server from PyPI on first launch and caches it.",
+  "//3": "Requires uv on PATH (https://docs.astral.sh/uv/). The setup-rutherford skill covers",
+  "//4": "the fallback if uv is missing or you prefer an installed entry point.",
+  "mcpServers": {
+    "rutherford": {
+      "command": "uvx",
+      "args": ["rutherford-mcp-server"]
+    }
+  }
+}

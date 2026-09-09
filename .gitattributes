@@ -1,0 +1,4 @@
+# Normalize line endings so the markdown skills and JSON manifests are stable
+# across Windows, macOS, and Linux checkouts.
+* text=auto eol=lf
+*.png binary

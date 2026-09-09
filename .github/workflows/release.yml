@@ -1,0 +1,75 @@
+name: Release
+
+# The plugin is distributed as a Claude Code marketplace (Claude reads
+# .claude-plugin/marketplace.json straight from the repo), so there is nothing to
+# publish to a package registry. This workflow turns a pushed version tag into a
+# visible GitHub Release with the changelog notes, after re-running the validator
+# and enforcing that the tag matches the manifest version.
+#
+# Release flow: bump .claude-plugin/{plugin,marketplace}.json (lockstep) + add a
+# dated CHANGELOG section, commit to main, then `git tag vX.Y.Z && git push --tags`.
+# This runs on the tag.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  github-release:
+    name: Publish to GitHub Releases
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      - name: Validate plugin, manifests, skills, agents, commands, and references
+        run: node scripts/validate-plugin.mjs
+
+      - name: Verify the tag matches the manifest version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          manifest=$(node -p "require('./.claude-plugin/plugin.json').version")
+          if [ "$version" != "$manifest" ]; then
+            echo "::error::Tag $tag (version $version) does not match plugin.json version $manifest — bump the manifests before tagging."
+            exit 1
+          fi
+          echo "tag $tag matches plugin.json version $manifest"
+
+      # Notes go to a FILE, not a step output. Writing them through $GITHUB_OUTPUT needs a heredoc
+      # delimiter, and a fixed one is forgeable by a changelog line that happens to equal it. A file
+      # sidesteps the question entirely and matches how rutherford-mcp-server's release workflow does it.
+      - name: Extract changelog entry
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          # Print the section between '## [<version>]' and the next section or link
+          # definition. Literal prefix match (index), not regex — the header contains '['/'.'.
+          awk -v v="## [$version]" '
+            index($0, v) == 1 {flag=1; next}
+            flag && /^## \[/ {exit}
+            flag && /^\[[^][]+\]: / {exit}
+            flag {print}
+          ' CHANGELOG.md > notes.md
+          if [ -z "$(tr -d '[:space:]' < notes.md)" ]; then
+            echo "::error::No CHANGELOG section found for version $version — add a '## [$version]' entry before tagging."
+            exit 1
+          fi
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}

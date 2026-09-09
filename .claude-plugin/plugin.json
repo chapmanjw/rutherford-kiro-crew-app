@@ -1,0 +1,21 @@
+{
+  "name": "rutherford",
+  "version": "0.2.4",
+  "description": "Give your AI coding agent a crew. Drives Claude Code, Codex, Cursor, Goose and more over ACP for delegation, consensus, debate, and review.",
+  "author": {
+    "name": "chapmanjw"
+  },
+  "homepage": "https://github.com/chapmanjw/rutherford-claude-plugin",
+  "repository": "https://github.com/chapmanjw/rutherford-claude-plugin",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "rutherford",
+    "acp",
+    "agent-orchestration",
+    "consensus",
+    "code-review",
+    "multi-agent",
+    "agent-skills"
+  ]
+}

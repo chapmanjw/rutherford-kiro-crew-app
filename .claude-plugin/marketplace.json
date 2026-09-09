@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "rutherford-claude",
+  "description": "Claude plugin for Rutherford — orchestrate a crew of coding agents (Claude Code, Codex, Cursor, Goose, and more) over the Agent Client Protocol.",
+  "owner": {
+    "name": "chapmanjw"
+  },
+  "plugins": [
+    {
+      "name": "rutherford",
+      "source": "./",
+      "version": "0.2.4",
+      "description": "Auto-registers the Rutherford MCP server (via uvx) and ships skills, an orchestrator agent, and slash commands for setup, panels, delegation, consensus, debate, and code review.",
+      "category": "development",
+      "keywords": [
+        "mcp",
+        "rutherford",
+        "acp",
+        "agent-orchestration",
+        "consensus",
+        "code-review"
+      ]
+    }
+  ]
+}

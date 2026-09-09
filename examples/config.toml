@@ -1,0 +1,49 @@
+# Example Rutherford config.toml
+#
+# Every setting is OPTIONAL and shown at its default. Rutherford works with zero config; delete what
+# you do not need. Place this at the project scope (<cwd>/.rutherford/config.toml) or the global scope
+# (%APPDATA%\rutherford\config.toml on Windows, ~/.config/rutherford/config.toml on Linux/macOS).
+#
+# Named panels live in a sibling panels.toon, NOT here (see examples/panels.toon). Custom roles live in
+# a roles/ directory (see examples/roles/). Full schema: reference/config.md.
+
+# --- Roster ---------------------------------------------------------------------------------------
+# Restrict the registry to an allowlist. Omit to enable every built-in plus any configured agent.
+# enabled_agents = ["claude_code", "codex", "goose"]
+
+# Probe a running Ollama (:11434) and LM Studio (:1234) and register each tool-capable model as a voice.
+auto_detect_local_models = true
+
+# --- Defaults -------------------------------------------------------------------------------------
+default_safety_mode = "read_only"   # read_only | propose | write | yolo (write/yolo need a trusted ws)
+default_timeout_s   = 300.0         # per-run wall-clock timeout, in seconds
+max_targets         = 8             # most agents a single consensus / debate call may fan out to
+# default_effort    = "high"        # low | medium | high | xhigh (omit to let the agent decide)
+synthesize_default  = false         # have consensus write a combined answer across the voices
+
+# --- Durability -----------------------------------------------------------------------------------
+# ephemeral (default) keeps nothing unless a call passes persist=true; job persists every run.
+default_persistence = "ephemeral"   # ephemeral | job
+# jobs_dir = "/abs/path/to/jobs"    # default: <cwd>/.rutherford/jobs
+
+# --- Safety ---------------------------------------------------------------------------------------
+# Absolute paths under which write/yolo delegations are permitted. read_only/propose never need this.
+# trusted_workspaces = ["/home/you/projects/myapp", "C:\\Users\\you\\work\\myrepo"]
+
+# Backstop: fail a read_only run that mutated its git tree out of band (adds two git reads per call).
+# verify_read_only = true
+
+# --- Roles ----------------------------------------------------------------------------------------
+# Extra directories to search for role markdown files (roles do NOT hot-reload; restart to load).
+# role_dirs = ["/home/you/.config/rutherford/roles"]
+
+# --- Agent overrides ------------------------------------------------------------------------------
+# Override a built-in's default model:
+# [agents.claude_code]
+# default_model = "claude-sonnet-4-6"
+
+# Point a built-in at a local model runtime (a free voice):
+# [agents.local-goose]
+# base    = "goose"
+# backend = "ollama"     # ollama | lmstudio
+# model   = "qwen3:8b"
