@@ -1,6 +1,6 @@
 {
   "name": "rutherford",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "displayName": "Rutherford",
   "description": "Give your AI coding agent a crew. Registers the Rutherford MCP server and ships skills plus an orchestrator agent to delegate, reach consensus, debate, review, and plan across Claude Code, Codex, Cursor, Goose, and more over the Agent Client Protocol.",
   "iconPath": "assets/icon.png",
