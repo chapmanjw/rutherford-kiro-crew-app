@@ -8,7 +8,7 @@
     "fs_read",
     "grep",
     "glob",
-    "@rutherford"
+    "@rutherford:rutherford"
   ],
   "allowedTools": [
     "fs_read",
