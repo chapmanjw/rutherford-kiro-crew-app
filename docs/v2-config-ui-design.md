@@ -174,16 +174,97 @@ Two contracts exist; Rutherford (installed app) uses the **external-app** one:
   observed is an app-enabled gate (`_require_enabled` → 403 `app_disabled`); there is
   **no per-handler auth decorator** — auth is the platform token scope (see §2.4).
 
-### 2.3 Global-vs-workspace config reading
+### 2.3 Cross-platform path resolution (HARD REQUIREMENT)
+
+> **HR-1 — The backend MUST resolve every Rutherford config/panels/roles location
+> PER-PLATFORM at runtime, from the host OS + environment. Never hardcode a Windows
+> (or any single-OS) path.** The design targets Windows, Linux, and macOS
+> universally; a path literal for one OS is a defect, not a shortcut.
+
+**Global config resolution (mirror Rutherford's own, per `config.md`):**
+
+```python
+import os
+from pathlib import Path
+
+def rutherford_global_config_path() -> Path:
+    # 1. Explicit override wins and SKIPS discovery entirely.
+    override = os.environ.get("RUTHERFORD_CONFIG")
+    if override:
+        return Path(override).expanduser()
+    # 2. Per-platform base dir, derived from the host OS + env at runtime.
+    if os.name == "nt":  # Windows
+        base = Path(os.environ["APPDATA"])            # %APPDATA%\rutherford\config.toml
+    else:                # Linux / macOS
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return base / "rutherford" / "config.toml"
+```
+
+- Windows → `%APPDATA%\rutherford\config.toml`
+- Linux/macOS → `$XDG_CONFIG_HOME/rutherford/config.toml`, fallback
+  `~/.config/rutherford/config.toml`
+- `RUTHERFORD_CONFIG=<file>` overrides both and skips discovery.
+
+**Project/workspace resolution (all OSes, identical logic):** first of
+`rutherford.toml`, `.rutherford.toml`, `.rutherford/config.toml` found in the working
+dir (priority order). Use `pathlib` joins (`cwd / "rutherford.toml"`) so the OS
+separator is applied by the library, never string-concatenated.
+
+**Panels/roles resolution (SEPARATE discovery, all OSes):** `panels.toon` and
+`roles/` are rooted at `~/.rutherford/` and `<cwd>/.rutherford/` — NOT under the
+platform config dir. `Path.home() / ".rutherford"` and `cwd / ".rutherford"` resolve
+correctly on every OS; do not assume `%APPDATA%` here.
+
+**Path-SEPARATOR handling is platform-specific (HR-2).** The multi-path env vars
+`RUTHERFORD_TRUSTED_WORKSPACES` and `role_dirs` (via `RUTHERFORD_ROLE_DIRS`) are
+delimited by the **OS path separator** — `;` on Windows, `:` on POSIX. The backend
+MUST split/join with the platform separator, never a hardcoded one:
+
+```python
+import os
+paths = value.split(os.pathsep)          # os.pathsep == ';' on Windows, ':' on POSIX
+joined = os.pathsep.join(paths)
+```
+
+Splitting on a hardcoded `:` corrupts Windows paths (`C:\…` splits at the drive
+colon). Use `os.pathsep`.
+
+**Reuse over reimplementation — resolver availability (verified in Step 1):**
+- The app-backend `AppContext` (`apps/context.py`) provides only `data_dir` (the
+  app's OWN writable dir, `~/.kiro/crew/apps/rutherford/data`) and an `AppStorage`
+  KV — **it does NOT expose a general config-path resolver, and nothing in it knows
+  Rutherford's config locations.** So `AppContext` cannot resolve these paths for us.
+- The idiomatic in-tree pattern is that an app **reimplements** the target tool's
+  resolution itself: `apps/builtins/pptx_maker/backend/paths.py` `engine_config_path()`
+  does exactly `Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home()/".config"))`
+  to mirror its engine's config dir. No shared `kiro_crew` cross-platform
+  config-dir helper is reused there. `kiro_crew/config/loader.py` resolves
+  *KiroCrew's own* config, not a third-party app's, so it is not directly reusable
+  for Rutherford's locations.
+- ⇒ **Decision:** the Rutherford v2 backend owns a small `paths.py` module (like
+  pptx_maker's) implementing HR-1/HR-2 with `os`/`pathlib`, mirroring `config.md`.
+  Whether Rutherford's **own MCP server** exposes an authoritative path-resolver we
+  could call instead (rather than us mirroring its rules) is **not determinable from
+  the `backend-dist` Python** (Rutherford's server is a separate ACP process) — see
+  open question **O8**. Preferring that resolver, if it exists, avoids the two copies
+  of the resolution logic drifting.
+
+Every path this module resolves is surfaced to the UI with its `scope`, resolved
+absolute `path`, whether it `exists`, and the `platform` it was resolved for (§3),
+so the user always sees the real native location for their OS.
+
+### 2.4 Global-vs-workspace config reading
 
 The backend reads Rutherford's config files directly from disk (it is Python running
-in the gateway with full filesystem access per the trust model). Paths and precedence
-are the Rutherford ones (§4). A `scope` query param selects which layer to surface:
-`?scope=global` reads only the global file; `?scope=workspace` reads only the
-project file for a supplied/looked-up working directory; a merged/effective view is a
-separate concern (see §3, `?scope=effective` open question O4).
+in the gateway with full filesystem access per the trust model), using the §2.3
+per-platform resolver. Paths and precedence are the Rutherford ones (§4). A `scope`
+query param selects which layer to surface: `?scope=global` reads only the global
+file; `?scope=workspace` reads only the project file for a supplied/looked-up working
+directory; a merged/effective view is a separate concern (see §3, `?scope=effective`
+open question O4). Every response carries the resolved native path + scope + platform
+(§3) — the backend never returns a path literal baked for one OS.
 
-### 2.4 Permissions the manifest must declare (P1)
+### 2.5 Permissions the manifest must declare (P1)
 
 Grounded in `app-platform-trust-model.md` + the `Permissions` dataclass
 (`manifest.py`) + the ops_mission_control manifest as a worked example:
@@ -221,14 +302,25 @@ All routes are declared relative in the `AppRoute` list; the framework serves th
 under `/api/apps/rutherford/…`. All P1 routes are **GET**. Response shapes below are
 the contracts P2/P3 writes will round-trip against.
 
+> **HR-3 — Every response that surfaces a config/panels/roles FILE MUST include, for
+> each file, its resolved absolute native `path`, its `scope`, whether it `exists`,
+> and the `platform` it was resolved for** (§2.3). This lets the UI render the real
+> Windows/Linux/macOS location on every OS and never shows a path baked for one
+> platform. `trusted_workspaces` and `role_dirs` values are split from their env vars
+> using the OS path separator (`os.pathsep`, §2.3 HR-2) before being returned as
+> arrays.
+
 ### `GET /api/apps/rutherford/config?scope=global|workspace`
 Reads one config layer. `scope=workspace` also accepts `?cwd=<abs path>` (else the
-active project dir). Response:
+active project dir). The `path` is resolved per-platform at runtime (§2.3) and
+returned verbatim so the UI renders the real native location. Response:
 
 ```jsonc
 {
   "scope": "global",
-  "path": "C:\\Users\\<user>\\AppData\\Roaming\\rutherford\\config.toml",
+  "platform": "windows",                    // "windows" | "linux" | "darwin" — the OS paths were resolved for
+  "path": "C:\\Users\\<user>\\AppData\\Roaming\\rutherford\\config.toml",  // resolved absolute native path (Linux/macOS would be e.g. /home/<user>/.config/rutherford/config.toml)
+  "resolved_from": "APPDATA",               // which rule produced it: "RUTHERFORD_CONFIG" | "APPDATA" | "XDG_CONFIG_HOME" | "HOME/.config" | "project-discovery"
   "exists": true,
   "raw": "…verbatim TOML text…",          // for the read-only viewer
   "parsed": {                               // structured mirror of §4 schema
@@ -236,8 +328,8 @@ active project dir). Response:
     "default_safety_mode": "read_only",
     "default_timeout_s": 300.0,
     "default_effort": null,
-    "trusted_workspaces": ["C:\\Users\\<user>\\Projects\\foo"],
-    "role_dirs": [],
+    "trusted_workspaces": ["C:\\Users\\<user>\\Projects\\foo"],  // env form split via os.pathsep (';' Win / ':' POSIX), §2.3 HR-2
+    "role_dirs": [],                                             // same os.pathsep split as trusted_workspaces
     "default_persistence": "ephemeral",
     "agents": {
       "claude-code": { "enabled": true, "default_model": null, "env": { "…": "…" } }
@@ -255,6 +347,11 @@ per-agent reachability (§5). Response:
 ```jsonc
 {
   "source": "mcp",                 // "mcp" (invoked doctor/capabilities) — see O3
+  "platform": "windows",           // "windows" | "linux" | "darwin" — enabled-state read from these files
+  "config_sources": [              // which resolved files the enabled-state was derived from (native paths, §2.3)
+    { "scope": "global",  "path": "C:\\Users\\<user>\\AppData\\Roaming\\rutherford\\config.toml", "exists": true },
+    { "scope": "workspace", "path": "<cwd>\\.rutherford\\config.toml", "exists": false }
+  ],
   "generated_at": "2026-09-09T18:00:00Z",
   "agents": [
     {
@@ -280,9 +377,10 @@ Read-only panels list (P1). Response:
 
 ```jsonc
 {
-  "sources": [                     // discovery order, lowest precedence first (§4)
-    { "scope": "global", "path": "~/.rutherford/panels.toon", "exists": true },
-    { "scope": "project", "path": "<cwd>/.rutherford/panels.toon", "exists": false }
+  "platform": "windows",           // "windows" | "linux" | "darwin"
+  "sources": [                     // discovery order, lowest precedence first (§4); paths RESOLVED per-platform (§2.3), never tilde literals
+    { "scope": "global",  "path": "C:\\Users\\<user>\\.rutherford\\panels.toon", "exists": true },   // Path.home()/.rutherford — NOT %APPDATA%
+    { "scope": "project", "path": "<cwd>\\.rutherford\\panels.toon", "exists": false }
   ],
   "panels": [
     {
@@ -304,12 +402,15 @@ Read-only role catalog (P1). Response:
 
 ```jsonc
 {
+  "platform": "windows",           // "windows" | "linux" | "darwin"
   "roles": [
     { "id": "principal-reviewer", "description": "…", "builtin": true, "source_path": null },
     { "id": "my-reviewer", "description": "…", "builtin": false,
-      "source_path": "C:\\…\\.rutherford\\roles\\my-reviewer.md" }
+      "source_path": "C:\\Users\\<user>\\.rutherford\\roles\\my-reviewer.md" }  // resolved native path
   ],
-  "role_dirs": ["…"],              // from config role_dirs + default .rutherford/roles
+  "role_dirs": [                   // config role_dirs (os.pathsep-split, §2.3) + default .rutherford/roles, each resolved + scoped
+    { "path": "C:\\Users\\<user>\\.rutherford\\roles", "scope": "global", "exists": true }
+  ],
   "hot_reload": false              // roles load once at server start (§4)
 }
 ```
@@ -322,16 +423,32 @@ same route roots, so nothing here is renamed.
 
 ## 4. Config data model (Step 2) — global vs workspace + precedence
 
-### Paths
+### Paths (resolved per-platform at runtime — §2.3, HARD REQUIREMENT)
 
-| Scope | Path |
-| --- | --- |
-| Global (Windows) | `%APPDATA%\rutherford\config.toml`  (i.e. `…\AppData\Roaming\rutherford\config.toml`) |
-| Global (Linux/macOS) | `$XDG_CONFIG_HOME/rutherford/config.toml` (fallback `~/.config/rutherford/config.toml`) |
-| Project | first of `rutherford.toml`, `.rutherford.toml`, `.rutherford/config.toml` found in the working directory (priority order) |
+The backend derives these from the host OS + env at runtime; the table shows the
+resolution rule per platform, and the API returns the **resolved native path** for
+whichever OS is running (never a hardcoded literal):
+
+| Scope | Windows | Linux / macOS |
+| --- | --- | --- |
+| Global | `%APPDATA%\rutherford\config.toml` (`…\AppData\Roaming\rutherford\config.toml`) | `$XDG_CONFIG_HOME/rutherford/config.toml`, fallback `~/.config/rutherford/config.toml` |
+| Global override | `RUTHERFORD_CONFIG=<file>` — single explicit file, **skips discovery** (all OSes) | same |
+| Project | first of `rutherford.toml`, `.rutherford.toml`, `.rutherford/config.toml` in the working dir (priority order) | same (identical logic, OS separator applied by `pathlib`) |
+| Panels | `<home>\.rutherford\panels.toon`, `<cwd>\.rutherford\panels.toon` (`Path.home()/.rutherford`, **not** `%APPDATA%`) | `~/.rutherford/panels.toon`, `<cwd>/.rutherford/panels.toon` |
+| Roles | `<home>\.rutherford\roles\`, `<cwd>\.rutherford\roles\`, + `role_dirs` | `~/.rutherford/roles/`, `<cwd>/.rutherford/roles/`, + `role_dirs` |
 
 A missing file is not an error — defaults apply. `RUTHERFORD_CONFIG=<path>` uses that
-single file and skips discovery.
+single file and skips discovery. **Panels and roles use a SEPARATE discovery rooted
+at `~/.rutherford/` and `<cwd>/.rutherford/`** — do not resolve them under the
+platform config dir (`%APPDATA%`/`$XDG_CONFIG_HOME`).
+
+### Platform-specific path SEPARATOR (HR-2)
+
+`RUTHERFORD_TRUSTED_WORKSPACES` and `RUTHERFORD_ROLE_DIRS` are **delimited by the OS
+path separator** — `;` on Windows, `:` on POSIX. The backend MUST split/join with
+`os.pathsep`, never a hardcoded delimiter (a hardcoded `:` corrupts `C:\…` drive
+paths on Windows). The resolved arrays are what the API returns for
+`trusted_workspaces` / `role_dirs`.
 
 ### Precedence (lowest → highest)
 
@@ -447,17 +564,30 @@ O1). Layout is a left rail of sections + a main panel:
   chip (ok / not-installed / handshake-failed / unknown), with a "Check reachability"
   action (§5, O2). Native table + badge/chip + button components.
 - **Config viewer** — a scope toggle (**Global | Workspace**) driving
-  `GET /config?scope=…`. Two sub-views: a **structured** view (the §4 schema as
-  labeled read-only fields/tables, incl. per-agent `[agents.<id>]` cards with env)
-  and a **raw TOML** view (verbatim `raw`, read-only, monospace). A "not present —
-  defaults apply" empty state when `exists=false`. (P2 turns the structured fields
-  editable in place.)
+  `GET /config?scope=…`. Each scope view MUST **display the resolved native
+  `path`** returned by the backend (the real `%APPDATA%\…` on Windows,
+  `~/.config/…` on Linux/macOS) with a clear label of **which scope/file** the values
+  came from and the **precedence chain** (global `acp.json` → global `config.toml` →
+  project `acp.json` → project `config.toml` → `RUTHERFORD_*` env). Two sub-views: a
+  **structured** view (the §4 schema as labeled read-only fields/tables, incl.
+  per-agent `[agents.<id>]` cards with env; `trusted_workspaces`/`role_dirs` shown as
+  the OS-separator-split arrays) and a **raw TOML** view (verbatim `raw`, read-only,
+  monospace). A "not present — defaults apply" empty state when `exists=false` (still
+  showing the resolved path that *would* be used). The path shown is whatever the
+  backend resolved for the host OS — the UI never renders a hardcoded Windows path.
+  (P2 turns the structured fields editable in place.)
 - **Panels list** — cards from `GET /panels`: name, description, strategy badge, seat
   list (cli/model/role/stance/weight chips), and an `origin_scope` tag showing which
-  layer won. Read-only in P1. (P3 adds create/edit + a `reload_panels` action.)
+  layer won. Also show the resolved native `sources[]` paths (`~/.rutherford/…` on
+  POSIX, `<home>\.rutherford\…` on Windows) with their scope. Read-only in P1.
+  (P3 adds create/edit + a `reload_panels` action.)
 - **Roles list** — table from `GET /roles`: id, description, built-in vs custom,
-  source path, plus a "roles require a server restart to reload" note. Read-only in
-  P1.
+  resolved native `source_path`, the resolved `role_dirs` (with scope), plus a "roles
+  require a server restart to reload" note. Read-only in P1.
+
+Every path rendered anywhere in the UI comes from a backend-resolved native path
+(§2.3/HR-3) tagged with its `platform` — the frontend never constructs or assumes an
+OS-specific path itself.
 
 **Native-look guidance:** consume only `@kirocrew/app-sdk/ui` components and the SDK
 theme variables; declare fallbacks for every CSS var (per `mcp-apps.md`, the
@@ -530,6 +660,19 @@ not in the `backend-dist` Python available in this environment.
 - **O7 (TOON parsing):** `panels.toon` is TOON, not TOML/JSON. Confirm the parser the
   backend should use to read (P1) and later write (P3) TOON faithfully, incl. the
   seat-key validation Rutherford itself enforces.
+- **O8 (path-resolver reuse — verified partially; one part undetermined):** The
+  app-backend `AppContext` (`apps/context.py`) does **not** expose a cross-platform
+  config-path resolver (only the app's own `data_dir` + `AppStorage`), and
+  `kiro_crew/config/loader.py` resolves KiroCrew's OWN config, not a third-party
+  app's — so neither is reusable for Rutherford's locations. The verified in-tree
+  pattern is an app reimplementing resolution with `os`/`pathlib`
+  (`apps/builtins/pptx_maker/backend/paths.py`), which is the §2.3 decision.
+  **Undetermined from `backend-dist`:** whether Rutherford's **own MCP server**
+  exposes an authoritative path/config-location resolver we could call (so the rules
+  live in one place instead of being mirrored in our `paths.py`). Confirm against the
+  Rutherford server source / its MCP tool list; if it does, prefer calling it over
+  duplicating the resolution logic. Until confirmed, the design mirrors `config.md`'s
+  rules directly (§2.3).
 
 ---
 
@@ -547,3 +690,11 @@ from **invoking `doctor`** (config gives *enabled*, doctor gives *reachable*). T
 single load-bearing unverifiable is **O1** — the frontend loader + `@kirocrew/app-sdk`
 API — which lives in the dashboard `website/` source not available here and must be
 confirmed before coding.
+
+**Cross-platform is a hard requirement (§2.3):** the backend resolves every
+config/panels/roles location per-platform at runtime (Windows `%APPDATA%`, Linux/macOS
+`$XDG_CONFIG_HOME`→`~/.config`, `~/.rutherford/` for panels/roles), honors
+`RUTHERFORD_CONFIG` + `RUTHERFORD_*` overrides, splits multi-path env vars with
+`os.pathsep` (`;`/`:`), and returns the resolved native `path` + `scope` + `platform`
+in every file-surfacing response so the UI shows the real location on any OS and never
+hardcodes a Windows path.
