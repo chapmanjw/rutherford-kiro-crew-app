@@ -1,7 +1,14 @@
 import { useAppApi } from '@kirocrew/app-sdk'
 import { Card, CardTitle, PageHeader, StatCard } from '@kirocrew/app-sdk/ui'
 import { useState, useEffect, useCallback } from 'react'
-import { Box, FileCog, Layers, UserSquare, RefreshCw, AlertTriangle } from 'lucide-react'
+import lucide from 'lucide-react'
+
+// The dashboard vendor shim for 'lucide-react' only STATICALLY named-exports ~40
+// icons; Box/FileCog/Layers/UserSquare are not among them and would throw an ES
+// parse-time "does not provide an export named ..." error. The shim's DEFAULT
+// export is a forwarding Proxy over the full lucide module, so destructuring off
+// the default import resolves any icon name.
+const { Box, FileCog, Layers, UserSquare, RefreshCw, AlertTriangle } = lucide
 
 const BASE = '/api/apps/rutherford'
 

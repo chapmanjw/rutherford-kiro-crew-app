@@ -2,12 +2,12 @@ import { jsxs as r, Fragment as p, jsx as e } from "react/jsx-runtime";
 import { useAppApi as V } from "@kirocrew/app-sdk";
 import { PageHeader as T, StatCard as h, Card as i, CardTitle as d } from "@kirocrew/app-sdk/ui";
 import { useState as o, useCallback as C, useEffect as z } from "react";
-import { Box as B, FileCog as j, Layers as F, UserSquare as O, RefreshCw as q, AlertTriangle as G } from "lucide-react";
-const u = "/api/apps/rutherford", H = [
-  { id: "status", label: "Overview", icon: B },
-  { id: "config", label: "Config", icon: j },
-  { id: "panels", label: "Panels", icon: F },
-  { id: "roles", label: "Roles", icon: O }
+import B from "lucide-react";
+const { Box: j, FileCog: F, Layers: O, UserSquare: q, RefreshCw: G, AlertTriangle: H } = B, u = "/api/apps/rutherford", I = [
+  { id: "status", label: "Overview", icon: j },
+  { id: "config", label: "Config", icon: F },
+  { id: "panels", label: "Panels", icon: O },
+  { id: "roles", label: "Roles", icon: q }
 ];
 function m({ meta: t }) {
   return /* @__PURE__ */ r("div", { className: "text-xs text-muted mt-1", children: [
@@ -22,7 +22,7 @@ function m({ meta: t }) {
     ] })
   ] });
 }
-function Y() {
+function Z() {
   const t = V(), [s, a] = o("status"), [l, N] = o(!0), [v, f] = o(null), [y, S] = o(null), [x, R] = o("global"), [_, w] = o(null), [k, P] = o(null), [A, $] = o(null), g = C(async () => {
     N(!0), f(null);
     try {
@@ -55,7 +55,7 @@ function Y() {
     /* @__PURE__ */ e(T, { title: "Rutherford", subtitle: "Config & status — read-only (Phase 1)" }),
     /* @__PURE__ */ r("div", { className: "px-6 pb-8 overflow-y-auto flex-1 min-h-0", children: [
       /* @__PURE__ */ r("div", { className: "flex gap-1 mb-5 border-b border-[var(--border,#2a2a2a)]", children: [
-        H.map(({ id: n, label: c, icon: b }) => /* @__PURE__ */ r(
+        I.map(({ id: n, label: c, icon: b }) => /* @__PURE__ */ r(
           "button",
           {
             onClick: () => a(n),
@@ -73,25 +73,25 @@ function Y() {
             onClick: () => void g(),
             className: "ml-auto flex items-center gap-1.5 px-3 py-2 text-sm text-muted hover:text-[var(--fg,#eee)]",
             title: "Reload",
-            children: /* @__PURE__ */ e(q, { size: 15, className: l ? "animate-spin" : "" })
+            children: /* @__PURE__ */ e(G, { size: 15, className: l ? "animate-spin" : "" })
           }
         )
       ] }),
       v && /* @__PURE__ */ r("div", { className: "flex items-center gap-2 text-sm text-amber-500 mb-4", children: [
-        /* @__PURE__ */ e(G, { size: 15 }),
+        /* @__PURE__ */ e(H, { size: 15 }),
         " ",
         v
       ] }),
       l && !y ? /* @__PURE__ */ e("p", { className: "text-sm text-muted", children: "Loading…" }) : /* @__PURE__ */ r(p, { children: [
-        s === "status" && /* @__PURE__ */ e(I, { status: y }),
-        s === "config" && /* @__PURE__ */ e(J, { config: _, scope: x, onScope: E }),
-        s === "panels" && /* @__PURE__ */ e(U, { panels: k }),
-        s === "roles" && /* @__PURE__ */ e(W, { roles: A })
+        s === "status" && /* @__PURE__ */ e(J, { status: y }),
+        s === "config" && /* @__PURE__ */ e(U, { config: _, scope: x, onScope: E }),
+        s === "panels" && /* @__PURE__ */ e(W, { panels: k }),
+        s === "roles" && /* @__PURE__ */ e(D, { roles: A })
       ] })
     ] })
   ] });
 }
-function I({ status: t }) {
+function J({ status: t }) {
   if (!t) return /* @__PURE__ */ e("p", { className: "text-sm text-muted", children: "No status." });
   const s = t.agents.enabled, a = t.agents.allowlist_configured ? String(s.length) : "All";
   return /* @__PURE__ */ r(p, { children: [
@@ -137,7 +137,7 @@ function I({ status: t }) {
     ] })
   ] });
 }
-function J({
+function U({
   config: t,
   scope: s,
   onScope: a
@@ -159,7 +159,7 @@ function J({
     ] }) : /* @__PURE__ */ e("p", { className: "text-sm text-muted", children: "No config." })
   ] });
 }
-function U({ panels: t }) {
+function W({ panels: t }) {
   return t ? t.sources.reduce((a, l) => a + l.panels.length, 0) === 0 ? /* @__PURE__ */ r(i, { children: [
     /* @__PURE__ */ e(d, { children: "Named panels" }),
     /* @__PURE__ */ r("p", { className: "text-sm text-muted mt-1", children: [
@@ -196,7 +196,7 @@ function U({ panels: t }) {
     ] }) }, a.path)
   ) }) : /* @__PURE__ */ e("p", { className: "text-sm text-muted", children: "No panels." });
 }
-function W({ roles: t }) {
+function D({ roles: t }) {
   return t ? t.sources.reduce((a, l) => a + l.roles.length, 0) === 0 ? /* @__PURE__ */ r(i, { children: [
     /* @__PURE__ */ e(d, { children: "Roles" }),
     /* @__PURE__ */ e("p", { className: "text-sm text-muted mt-1", children: "No role markdown files found. Checked:" }),
@@ -221,5 +221,5 @@ function W({ roles: t }) {
   ) }) : /* @__PURE__ */ e("p", { className: "text-sm text-muted", children: "No roles." });
 }
 export {
-  Y as default
+  Z as default
 };
