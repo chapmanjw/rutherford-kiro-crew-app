@@ -39,6 +39,23 @@
       "args": ["rutherford-mcp-server@3.2.0"]
     }
   },
+  "ui": {
+    "entry": "dist/index.mjs",
+    "pages": [
+      {
+        "route": "/apps/rutherford",
+        "label": "Rutherford",
+        "icon": "Boxes",
+        "group": "Apps"
+      }
+    ]
+  },
+  "backend": {
+    "routes": "/api/apps/rutherford",
+    "hooks": {
+      "routes": "backend.routes:register_routes"
+    }
+  },
   "dependencies": {
     "managedBy": "app",
     "commands": ["uvx"]
@@ -47,6 +64,8 @@
     "os": ["macos", "linux", "windows"]
   },
   "permissions": {
-    "network": true
+    "network": true,
+    "api": ["/api/apps/rutherford"],
+    "storage": true
   }
 }

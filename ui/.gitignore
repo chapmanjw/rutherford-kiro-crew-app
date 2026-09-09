@@ -1,0 +1,4 @@
+# node_modules is never committed; the built dist/index.mjs IS committed
+# because a local `kirocrew app install <dir>` copies the tree as-is and does
+# not run the UI build step.
+node_modules/
