@@ -209,26 +209,30 @@ export default function Rutherford() {
 
 function StatusView({ status }: { status: StatusResp | null }) {
   if (!status) return <p className="text-sm text-muted">No status.</p>
-  const enabled = status.agents.enabled
-  const rosterValue = status.agents.allowlist_configured ? String(enabled.length) : 'All'
+  const agents = status.agents || { enabled: [], enabled_source: '', allowlist_configured: false, roster: [] }
+  const enabled = Array.isArray(agents.enabled) ? agents.enabled : []
+  const roster = Array.isArray(agents.roster) ? agents.roster : []
+  const acpSources = Array.isArray(status.acp) ? status.acp : []
+  const defaults = status.defaults || {}
+  const rosterValue = agents.allowlist_configured ? String(enabled.length) : 'All'
   const envKeys = Object.keys(status.env_overrides || {}).filter((k) => k !== '_note')
   return (
     <>
       <div className="grid gap-3.5 grid-cols-[repeat(auto-fit,minmax(150px,1fr))] mb-6">
         <StatCard label="Platform" value={status.platform} />
         <StatCard label="Agents enabled" value={rosterValue} accent />
-        <StatCard label="Safety mode" value={status.defaults.safety_mode ?? 'read_only'} />
+        <StatCard label="Safety mode" value={defaults.safety_mode ?? 'read_only'} />
         <StatCard
           label="Local model detect"
-          value={status.defaults.auto_detect_local_models ? 'on' : 'off'}
+          value={defaults.auto_detect_local_models ? 'on' : 'off'}
         />
       </div>
 
       <Card>
         <CardTitle>Resolved roster</CardTitle>
-        {status.agents.roster && status.agents.roster.length > 0 ? (
+        {roster.length > 0 ? (
           <div className="mt-2 flex flex-col gap-1.5">
-            {status.agents.roster.map((a) => (
+            {roster.map((a) => (
               <div key={a.id} className="flex items-center gap-2 text-sm">
                 <span className="px-2 py-0.5 rounded text-xs bg-[var(--surface-2,#2a2a2a)] text-[var(--fg,#eee)]">
                   {a.id}
@@ -240,7 +244,7 @@ function StatusView({ status }: { status: StatusResp | null }) {
               </div>
             ))}
           </div>
-        ) : status.agents.allowlist_configured ? (
+        ) : agents.allowlist_configured ? (
           <div className="flex flex-wrap gap-2 mt-2">
             {enabled.map((a) => (
               <span
@@ -254,7 +258,7 @@ function StatusView({ status }: { status: StatusResp | null }) {
         ) : (
           <p className="text-sm text-muted mt-1">
             No <code>enabled_agents</code> allowlist configured — Rutherford enables every
-            built-in agent plus any configured agent (source: {status.agents.enabled_source}).
+            built-in agent plus any configured agent (source: {agents.enabled_source || 'default'}).
           </p>
         )}
       </Card>
@@ -263,8 +267,8 @@ function StatusView({ status }: { status: StatusResp | null }) {
 
       <Card>
         <CardTitle>Config locations</CardTitle>
-        <PathChip meta={status.config_locations.global} />
-        <PathChip meta={status.config_locations.workspace} />
+        {status.config_locations?.global && <PathChip meta={status.config_locations.global} />}
+        {status.config_locations?.workspace && <PathChip meta={status.config_locations.workspace} />}
       </Card>
 
       <div className="h-3" />
@@ -275,7 +279,7 @@ function StatusView({ status }: { status: StatusResp | null }) {
             <Server size={14} /> acp.json (agent servers)
           </span>
         </CardTitle>
-        {status.acp.map((s) => {
+        {acpSources.map((s) => {
           const keys = Object.keys(s.agent_servers || {})
           return (
             <div key={s.path} className="mt-2">
@@ -307,12 +311,12 @@ function StatusView({ status }: { status: StatusResp | null }) {
                 <div key={k} className="text-xs">
                   <code>{k}</code>
                   {' = '}
-                  <code className="text-muted">{String(status.env_overrides[k])}</code>
+                  <code className="text-muted">{String((status.env_overrides || {})[k])}</code>
                 </div>
               ))}
             </div>
-            {status.env_overrides['_note'] && (
-              <p className="text-xs text-amber-500 mt-2">{String(status.env_overrides['_note'])}</p>
+            {(status.env_overrides || {})['_note'] && (
+              <p className="text-xs text-amber-500 mt-2">{String((status.env_overrides || {})['_note'])}</p>
             )}
           </Card>
         </>
@@ -322,7 +326,7 @@ function StatusView({ status }: { status: StatusResp | null }) {
 
       <Card>
         <CardTitle>Reachability</CardTitle>
-        <p className="text-sm text-muted mt-1">{status.reachability.note}</p>
+        <p className="text-sm text-muted mt-1">{status.reachability?.note ?? '—'}</p>
       </Card>
     </>
   )
@@ -456,6 +460,9 @@ type Draft = {
 function toDraft(config: ConfigResp): Draft {
   const c = config.config || {}
   const num = (k: string) => (typeof c[k] === 'number' ? String(c[k]) : '')
+  const derived = config.derived || ({} as ConfigResp['derived'])
+  const asList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
   return {
     default_safety_mode: typeof c.default_safety_mode === 'string' ? c.default_safety_mode : 'read_only',
     default_timeout_s: num('default_timeout_s'),
@@ -464,10 +471,14 @@ function toDraft(config: ConfigResp): Draft {
     default_persistence:
       typeof c.default_persistence === 'string' ? c.default_persistence : 'ephemeral',
     synthesize_default: c.synthesize_default === true,
-    enabled_agents: config.derived.enabled_agents.slice(),
-    trusted_workspaces: config.derived.trusted_workspaces.slice(),
-    role_dirs: config.derived.role_dirs.slice(),
-    agents: (config.agents || []).map((a) => ({ ...a, env: { ...a.env }, extra: { ...a.extra } })),
+    enabled_agents: asList(derived.enabled_agents),
+    trusted_workspaces: asList(derived.trusted_workspaces),
+    role_dirs: asList(derived.role_dirs),
+    agents: (Array.isArray(config.agents) ? config.agents : []).map((a) => ({
+      ...a,
+      env: { ...(a.env || {}) },
+      extra: { ...(a.extra || {}) },
+    })),
   }
 }
 
@@ -755,7 +766,8 @@ function ConfigView({
 
 function PanelsView({ panels }: { panels: PanelsResp | null }) {
   if (!panels) return <p className="text-sm text-muted">No panels.</p>
-  const total = panels.sources.reduce((n, s) => n + s.panels.length, 0)
+  const sources = Array.isArray(panels.sources) ? panels.sources : []
+  const total = sources.reduce((n, s) => n + (Array.isArray(s.panels) ? s.panels.length : 0), 0)
   if (total === 0) {
     return (
       <Card>
@@ -763,7 +775,7 @@ function PanelsView({ panels }: { panels: PanelsResp | null }) {
         <p className="text-sm text-muted mt-1">
           No <code>panels.toon</code> found (read-only — editing is a later step). Checked:
         </p>
-        {panels.sources.map((s) => (
+        {sources.map((s) => (
           <PathChip key={s.path} meta={s} />
         ))}
       </Card>
@@ -771,14 +783,15 @@ function PanelsView({ panels }: { panels: PanelsResp | null }) {
   }
   return (
     <>
-      {panels.sources.map((s) =>
-        s.panels.length === 0 ? null : (
+      {sources.map((s) => {
+        const sp = Array.isArray(s.panels) ? s.panels : []
+        return sp.length === 0 ? null : (
           <div key={s.path} className="mb-4">
             <Card>
               <CardTitle>Panels · {s.scope} (read-only)</CardTitle>
               <PathChip meta={s} />
               <div className="mt-3 flex flex-col gap-2">
-                {s.panels.map((p) => (
+                {sp.map((p) => (
                   <div key={p.name} className="p-3 rounded bg-[var(--surface-2,#1e1e1e)]">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-[var(--fg,#eee)]">{p.name}</span>
@@ -797,15 +810,16 @@ function PanelsView({ panels }: { panels: PanelsResp | null }) {
               </div>
             </Card>
           </div>
-        ),
-      )}
+        )
+      })}
     </>
   )
 }
 
 function RolesView({ roles }: { roles: RolesResp | null }) {
   if (!roles) return <p className="text-sm text-muted">No roles.</p>
-  const total = roles.sources.reduce((n, s) => n + s.roles.length, 0)
+  const sources = Array.isArray(roles.sources) ? roles.sources : []
+  const total = sources.reduce((n, s) => n + (Array.isArray(s.roles) ? s.roles.length : 0), 0)
   if (total === 0) {
     return (
       <Card>
@@ -813,7 +827,7 @@ function RolesView({ roles }: { roles: RolesResp | null }) {
         <p className="text-sm text-muted mt-1">
           No role markdown files found (read-only — editing is a later step). Checked:
         </p>
-        {roles.sources.map((s) => (
+        {sources.map((s) => (
           <PathChip key={s.path} meta={s} />
         ))}
       </Card>
@@ -821,14 +835,15 @@ function RolesView({ roles }: { roles: RolesResp | null }) {
   }
   return (
     <>
-      {roles.sources.map((s) =>
-        s.roles.length === 0 ? null : (
+      {sources.map((s) => {
+        const sr = Array.isArray(s.roles) ? s.roles : []
+        return sr.length === 0 ? null : (
           <div key={s.path} className="mb-4">
             <Card>
               <CardTitle>Roles · {s.scope} (read-only)</CardTitle>
               <PathChip meta={s} />
               <div className="mt-3 flex flex-wrap gap-2">
-                {s.roles.map((r) => (
+                {sr.map((r) => (
                   <span
                     key={r.path}
                     className="px-2 py-1 rounded text-xs bg-[var(--surface-2,#2a2a2a)] text-[var(--fg,#eee)]"
@@ -840,8 +855,8 @@ function RolesView({ roles }: { roles: RolesResp | null }) {
               </div>
             </Card>
           </div>
-        ),
-      )}
+        )
+      })}
     </>
   )
 }
