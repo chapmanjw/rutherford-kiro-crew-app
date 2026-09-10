@@ -1,6 +1,6 @@
 import { useAppApi } from '@kirocrew/app-sdk'
 import { Card, CardTitle, PageHeader, StatCard } from '@kirocrew/app-sdk/ui'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import lucide from 'lucide-react'
 
 // The dashboard vendor shim for 'lucide-react' only STATICALLY named-exports ~40
@@ -101,18 +101,48 @@ export default function Rutherford() {
   const [panels, setPanels] = useState<PanelsResp | null>(null)
   const [roles, setRoles] = useState<RolesResp | null>(null)
 
+  // Monotonic request id for /config fetches. Every config fetch stamps the id
+  // it was issued under and the scope it asked for; a response is applied ONLY
+  // if it is still the latest issued request AND its echoed scope matches the
+  // scope we currently want. This is the latest-wins guard that stops a
+  // superseded / out-of-order fetch from landing the wrong scope's payload into
+  // `config` (the root cause of the Global-shows-empty race).
+  const configReqRef = useRef(0)
+
+  // Owns ALL /config fetching. Kept OUT of loadAll's parallel batch so a scope
+  // toggle never re-fires the whole status/panels/roles batch. The backend
+  // response is a Meta whose `scope` field echoes the scope it resolved, so we
+  // drop any response whose scope !== the requested scope as a second belt.
+  const fetchConfig = useCallback(
+    async (scope: 'global' | 'workspace') => {
+      const reqId = ++configReqRef.current
+      try {
+        const c = (await api.get(`${BASE}/config?scope=${scope}`)) as ConfigResp | null
+        // Superseded by a newer request → drop.
+        if (reqId !== configReqRef.current) return
+        // Wrong scope echoed back (out-of-order / mismatched) → drop.
+        if (!c || (c as ConfigResp).scope !== scope) return
+        setConfig(c)
+      } catch (e) {
+        if (reqId !== configReqRef.current) return
+        setErr(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [api],
+  )
+
+  // loadAll no longer fetches /config and no longer depends on configScope, so
+  // toggling scope does NOT re-run this batch. Config is fetched separately.
   const loadAll = useCallback(async () => {
     setLoading(true)
     setErr(null)
     try {
-      const [s, c, p, r] = await Promise.all([
+      const [s, p, r] = await Promise.all([
         api.get(`${BASE}/status`),
-        api.get(`${BASE}/config?scope=${configScope}`),
         api.get(`${BASE}/panels`),
         api.get(`${BASE}/roles`),
       ])
       setStatus(s as StatusResp)
-      setConfig(c as ConfigResp)
       setPanels(p as PanelsResp)
       setRoles(r as RolesResp)
     } catch (e) {
@@ -120,19 +150,20 @@ export default function Rutherford() {
     } finally {
       setLoading(false)
     }
-  }, [api, configScope])
-
-  useEffect(() => { void loadAll() }, [loadAll])
-
-  const reloadConfig = useCallback(async (scope: 'global' | 'workspace') => {
-    setConfigScope(scope)
-    try {
-      const c = await api.get(`${BASE}/config?scope=${scope}`)
-      setConfig(c as ConfigResp)
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    }
   }, [api])
+
+  // Initial + manual full reload (status/panels/roles) plus a config fetch for
+  // the current scope. configScope is intentionally NOT a dep of loadAll; the
+  // config fetch below re-runs on its own when configScope changes.
+  useEffect(() => { void loadAll() }, [loadAll])
+  useEffect(() => { void fetchConfig(configScope) }, [fetchConfig, configScope])
+
+  // Scope toggle: flip the scope; the effect above fires the guarded fetch.
+  // (Setting state here rather than fetching directly keeps a single fetch path
+  // and lets the latest-wins guard arbitrate.)
+  const reloadConfig = useCallback((scope: 'global' | 'workspace') => {
+    setConfigScope(scope)
+  }, [])
 
   // A PUT succeeded only if the backend echoed the persisted payload with
   // written===true. The host app-sdk `put` RESOLVES null/undefined/empty on a
@@ -178,6 +209,9 @@ export default function Rutherford() {
       }
 
       // Confirmed persisted: reseed from the authoritative server payload.
+      // Bump the request sequence so any in-flight scope fetch issued earlier is
+      // now stale and cannot overwrite this just-saved payload.
+      configReqRef.current++
       setConfig(confirmed)
       // Refresh Overview roster/defaults too.
       try {
@@ -616,17 +650,24 @@ function ConfigView({
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
+  // Render guard: the loaded config must match the selected scope. Until the
+  // scope-matched fetch lands, `config` may still hold the previous scope's
+  // payload — showing it would let Global render a Workspace payload (the race
+  // symptom). Gate the form on config.scope === scope; otherwise show loading.
+  const scopeReady = !!config && config.scope === scope
+
   useEffect(() => {
-    // Only (re)seed the draft from a config that actually carries data. A
-    // null/empty config (e.g. an unconfirmed save that resolved empty) must
-    // NEVER blank the user's in-progress fields — keep the prior draft.
-    if (!config) {
+    // (Re)seed the draft only from a scope-matched config that carries data. A
+    // null/mismatched/empty config (e.g. an unconfirmed save that resolved
+    // empty, or a not-yet-arrived scope switch) must NEVER blank the user's
+    // in-progress fields — keep the prior draft.
+    if (!config || config.scope !== scope) {
       setDraft((d) => d ?? null)
       return
     }
     setSaveMsg(null)
     setDraft(toDraft(config))
-  }, [config])
+  }, [config, scope])
 
   const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d))
 
@@ -682,8 +723,8 @@ function ConfigView({
         </div>
       )}
 
-      {!config || !draft ? (
-        <p className="text-sm text-muted">No config.</p>
+      {!scopeReady || !draft ? (
+        <p className="text-sm text-muted">Loading {scope} config…</p>
       ) : (
         <>
           <Card>
