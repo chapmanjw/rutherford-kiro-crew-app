@@ -134,18 +134,59 @@ export default function Rutherford() {
     }
   }, [api])
 
+  // A PUT succeeded only if the backend echoed the persisted payload with
+  // written===true. The host app-sdk `put` RESOLVES null/undefined/empty on a
+  // non-OK HTTP response (idiom: `res.ok ? res.json() : null`) instead of
+  // throwing — notably on a transient 403 during the host's credential
+  // silent-refresh window on a mutating request. So we must inspect the value,
+  // not merely rely on the absence of a thrown error.
+  const isPersisted = (c: unknown): c is ConfigResp =>
+    !!c && typeof c === 'object' && (c as ConfigResp).written === true
+
   const saveConfig = useCallback(
     async (scope: 'global' | 'workspace', body: Record<string, unknown>) => {
-      const c = await api.put(`${BASE}/config?scope=${scope}`, body)
-      setConfig(c as ConfigResp)
+      const url = `${BASE}/config?scope=${scope}`
+
+      // Attempt the PUT; on an unconfirmed (null/empty/no-written) response,
+      // retry ONCE after a short delay to ride through the silent-refresh 403.
+      let resp: unknown = await api.put(url, body)
+      if (!isPersisted(resp)) {
+        await new Promise((r) => setTimeout(r, 600))
+        resp = await api.put(url, body)
+      }
+
+      // If the PUT response still doesn't confirm persistence, fall back to a
+      // verification GET and confirm the file actually round-tripped the change.
+      let confirmed: ConfigResp | null = isPersisted(resp) ? (resp as ConfigResp) : null
+      if (!confirmed) {
+        const got = await api.get(url)
+        if (got && typeof got === 'object') {
+          const gc = got as ConfigResp
+          // Verify the values we sent are what the file now holds. Comparing the
+          // full body is brittle (backend may normalize/round scalars), so we
+          // check that every scalar/array key in the body matches the re-read
+          // config, which is sufficient to prove the write landed.
+          if (bodyMatchesConfig(body, gc.config)) confirmed = gc
+        }
+      }
+
+      if (!confirmed) {
+        // Do NOT update state on failure — keep the user's entered values.
+        throw new Error(
+          'Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your entered values were kept; try Save again.',
+        )
+      }
+
+      // Confirmed persisted: reseed from the authoritative server payload.
+      setConfig(confirmed)
       // Refresh Overview roster/defaults too.
       try {
         const s = await api.get(`${BASE}/status`)
-        setStatus(s as StatusResp)
+        if (s && typeof s === 'object') setStatus(s as StatusResp)
       } catch {
         /* non-fatal */
       }
-      return c as ConfigResp
+      return confirmed
     },
     [api],
   )
@@ -482,6 +523,38 @@ function toDraft(config: ConfigResp): Draft {
   }
 }
 
+// Confirm a write landed: every scalar/array key we SENT must equal what the
+// re-read config now holds. Used as a fallback proof-of-persistence when the
+// PUT response itself doesn't carry written===true (host `put` can resolve
+// empty on a non-OK response). Scalars are compared loosely (String()) so a
+// backend numeric normalization (e.g. 30 vs 30.0) still counts as a match; the
+// nested `agents` table is compared by the set of declared agent ids, which is
+// enough to prove the mutation reached disk without reimplementing TOML
+// round-trip semantics here.
+function bodyMatchesConfig(
+  body: Record<string, unknown>,
+  config: Record<string, unknown> | undefined,
+): boolean {
+  if (!config || typeof config !== 'object') return false
+  const scalarEq = (a: unknown, b: unknown) => String(a) === String(b)
+  for (const [k, v] of Object.entries(body)) {
+    const got = config[k]
+    if (k === 'agents') {
+      const sent = v && typeof v === 'object' ? Object.keys(v as object).sort() : []
+      const have = got && typeof got === 'object' ? Object.keys(got as object).sort() : []
+      if (sent.length !== have.length || sent.some((x, i) => x !== have[i])) return false
+      continue
+    }
+    if (Array.isArray(v)) {
+      if (!Array.isArray(got) || got.length !== v.length) return false
+      if (v.some((x, i) => !scalarEq(x, (got as unknown[])[i]))) return false
+      continue
+    }
+    if (!scalarEq(v, got)) return false
+  }
+  return true
+}
+
 // Build the write body, preserving any config keys we don't surface as editable
 // (so a save doesn't silently drop settings the UI doesn't expose).
 function toBody(config: ConfigResp, d: Draft): Record<string, unknown> {
@@ -544,8 +617,15 @@ function ConfigView({
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   useEffect(() => {
+    // Only (re)seed the draft from a config that actually carries data. A
+    // null/empty config (e.g. an unconfirmed save that resolved empty) must
+    // NEVER blank the user's in-progress fields — keep the prior draft.
+    if (!config) {
+      setDraft((d) => d ?? null)
+      return
+    }
     setSaveMsg(null)
-    setDraft(config ? toDraft(config) : null)
+    setDraft(toDraft(config))
   }, [config])
 
   const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d))
