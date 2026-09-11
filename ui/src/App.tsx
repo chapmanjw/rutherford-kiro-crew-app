@@ -113,14 +113,14 @@ export default function Rutherford() {
   // has since switched to a DIFFERENT scope.
   const configScopeRef = useRef<'global' | 'workspace'>('global')
 
-  // Owns ALL /config fetching. Kept OUT of loadAll's parallel batch so a scope
+  // Owns ALL /rutherford-config fetching. Kept OUT of loadAll's parallel batch so a scope
   // toggle never re-fires the whole status/panels/roles batch.
   const fetchConfig = useCallback(
     async (scope: 'global' | 'workspace') => {
       // Record the scope this call is asking for; this is what we arbitrate on.
       configScopeRef.current = scope
       try {
-        const c = (await api.get(`${BASE}/config?scope=${scope}`)) as ConfigResp | null
+        const c = (await api.get(`${BASE}/rutherford-config?scope=${scope}`)) as ConfigResp | null
         // The user switched to a DIFFERENT scope while we were in flight → drop.
         // (A same-scope re-run is NOT a supersede, so it can never deadlock.)
         if (configScopeRef.current !== scope) return
@@ -142,7 +142,7 @@ export default function Rutherford() {
     [api],
   )
 
-  // loadAll no longer fetches /config and no longer depends on configScope, so
+  // loadAll no longer fetches /rutherford-config and no longer depends on configScope, so
   // toggling scope does NOT re-run this batch. Config is fetched separately.
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -187,7 +187,7 @@ export default function Rutherford() {
 
   const saveConfig = useCallback(
     async (scope: 'global' | 'workspace', body: Record<string, unknown>) => {
-      const url = `${BASE}/config?scope=${scope}`
+      const url = `${BASE}/rutherford-config?scope=${scope}`
 
       // Attempt the PUT; on an unconfirmed (null/empty/no-written) response,
       // retry ONCE after a short delay to ride through the silent-refresh 403.
@@ -422,10 +422,27 @@ function StatusView({ status }: { status: StatusResp | null }) {
 
 // ---- editable primitives -------------------------------------------------
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+// A labelled form control. `label` is the human-readable title; `hint` is the
+// raw config key shown small + muted so the mapping stays unambiguous; `desc`
+// is an optional one-line explanation. Presentational only.
+function Field({
+  label,
+  hint,
+  desc,
+  children,
+}: {
+  label: string
+  hint?: string
+  desc?: string
+  children: React.ReactNode
+}) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs text-muted">{label}</span>
+      <span className="text-sm text-[var(--fg,#eee)]">
+        {label}
+        {hint && <code className="ml-1.5 text-[10px] text-muted opacity-70">{hint}</code>}
+      </span>
+      {desc && <span className="text-[11px] text-muted -mt-0.5">{desc}</span>}
       {children}
     </label>
   )
@@ -436,17 +453,25 @@ const inputCls =
 
 function StringList({
   label,
+  hint,
+  desc,
   values,
   onChange,
 }: {
   label: string
+  hint?: string
+  desc?: string
   values: string[]
   onChange: (v: string[]) => void
 }) {
   const [draft, setDraft] = useState('')
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-xs text-muted">{label}</span>
+      <span className="text-sm text-[var(--fg,#eee)]">
+        {label}
+        {hint && <code className="ml-1.5 text-[10px] text-muted opacity-70">{hint}</code>}
+      </span>
+      {desc && <span className="text-[11px] text-muted -mt-0.5">{desc}</span>}
       <div className="flex flex-col gap-1.5">
         {values.map((v, i) => (
           <div key={i} className="flex items-center gap-1.5">
@@ -501,20 +526,24 @@ function StringList({
 
 function Toggle({
   label,
+  hint,
+  desc,
   value,
   onChange,
 }: {
   label: string
+  hint?: string
+  desc?: string
   value: boolean
   onChange: (v: boolean) => void
 }) {
   return (
-    <label className="flex items-center gap-2 cursor-pointer">
+    <label className="flex items-start gap-2 cursor-pointer">
       <button
         type="button"
         onClick={() => onChange(!value)}
         className={
-          'w-9 h-5 rounded-full transition-colors relative ' +
+          'mt-0.5 shrink-0 w-9 h-5 rounded-full transition-colors relative ' +
           (value ? 'bg-[var(--accent,#6366f1)]' : 'bg-[var(--surface-3,#333)]')
         }
       >
@@ -525,7 +554,13 @@ function Toggle({
           }
         />
       </button>
-      <span className="text-sm text-[var(--fg,#eee)]">{label}</span>
+      <span className="flex flex-col">
+        <span className="text-sm text-[var(--fg,#eee)]">
+          {label}
+          {hint && <code className="ml-1.5 text-[10px] text-muted opacity-70">{hint}</code>}
+        </span>
+        {desc && <span className="text-[11px] text-muted">{desc}</span>}
+      </span>
     </label>
   )
 }
@@ -547,7 +582,20 @@ type Draft = {
 
 function toDraft(config: ConfigResp): Draft {
   const c = config.config || {}
-  const num = (k: string) => (typeof c[k] === 'number' ? String(c[k]) : '')
+  // Bind a number field to the LOADED value. A TOML scalar parses to a JS
+  // number (int OR float), which is the normal case; a hand-quoted value
+  // ("1800") arrives as a numeric string and must still bind rather than
+  // silently blanking to a default. Only a genuinely ABSENT key (undefined) or
+  // a non-numeric value falls back to '' (the "unset — use Rutherford's own
+  // default" state), which is exactly how max_targets already binds correctly.
+  const num = (k: string): string => {
+    const v = c[k]
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+    if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) {
+      return String(Number(v))
+    }
+    return ''
+  }
   const derived = config.derived || ({} as ConfigResp['derived'])
   const asList = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
@@ -749,7 +797,11 @@ function ConfigView({
               </p>
             )}
             <div className="grid gap-3.5 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] mt-3">
-              <Field label="default_safety_mode">
+              <Field
+                label="Default safety mode"
+                hint="default_safety_mode"
+                desc="read_only · propose · write · yolo"
+              >
                 <select
                   className={inputCls}
                   value={draft.default_safety_mode}
@@ -762,7 +814,7 @@ function ConfigView({
                   ))}
                 </select>
               </Field>
-              <Field label="default_timeout_s">
+              <Field label="Default timeout (seconds)" hint="default_timeout_s">
                 <input
                   type="number"
                   className={inputCls}
@@ -770,7 +822,7 @@ function ConfigView({
                   onChange={(e) => patch({ default_timeout_s: e.target.value })}
                 />
               </Field>
-              <Field label="max_targets">
+              <Field label="Max agents per panel" hint="max_targets">
                 <input
                   type="number"
                   className={inputCls}
@@ -778,7 +830,11 @@ function ConfigView({
                   onChange={(e) => patch({ max_targets: e.target.value })}
                 />
               </Field>
-              <Field label="default_persistence">
+              <Field
+                label="Run persistence"
+                hint="default_persistence"
+                desc="ephemeral · job"
+              >
                 <select
                   className={inputCls}
                   value={draft.default_persistence}
@@ -794,12 +850,14 @@ function ConfigView({
             </div>
             <div className="flex flex-wrap gap-6 mt-4">
               <Toggle
-                label="auto_detect_local_models"
+                label="Auto-detect local models (Ollama / LM Studio)"
+                hint="auto_detect_local_models"
                 value={draft.auto_detect_local_models}
                 onChange={(v) => patch({ auto_detect_local_models: v })}
               />
               <Toggle
-                label="synthesize_default"
+                label="Synthesize a combined answer by default"
+                hint="synthesize_default"
                 value={draft.synthesize_default}
                 onChange={(v) => patch({ synthesize_default: v })}
               />
@@ -809,20 +867,26 @@ function ConfigView({
           <div className="h-3" />
 
           <Card>
-            <CardTitle>Lists</CardTitle>
+            <CardTitle>Allowlists &amp; directories</CardTitle>
             <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(240px,1fr))] mt-3">
               <StringList
-                label="enabled_agents"
+                label="Enabled agents (allowlist)"
+                hint="enabled_agents"
+                desc="Empty = every configured agent is enabled."
                 values={draft.enabled_agents}
                 onChange={(v) => patch({ enabled_agents: v })}
               />
               <StringList
-                label="trusted_workspaces"
+                label="Trusted workspaces (write/yolo allowed)"
+                hint="trusted_workspaces"
+                desc="Paths where write & yolo delegations may run."
                 values={draft.trusted_workspaces}
                 onChange={(v) => patch({ trusted_workspaces: v })}
               />
               <StringList
-                label="role_dirs"
+                label="Custom role directories"
+                hint="role_dirs"
+                desc="Extra folders scanned for role persona files."
                 values={draft.role_dirs}
                 onChange={(v) => patch({ role_dirs: v })}
               />
@@ -832,8 +896,20 @@ function ConfigView({
           <div className="h-3" />
 
           <Card>
-            <CardTitle>Agents [agents.*]</CardTitle>
+            <CardTitle>Per-agent overrides</CardTitle>
+            <p className="text-[11px] text-muted mt-1">
+              <code className="text-[10px] opacity-70">[agents.*]</code> — per-agent
+              default model and enabled flag.
+            </p>
             <div className="mt-3 flex flex-col gap-2">
+              {draft.agents.length > 0 && (
+                <div className="flex items-center gap-2 px-2 text-[10px] uppercase tracking-wide text-muted opacity-70">
+                  <span className="w-32">Agent</span>
+                  <span className="flex-1">Default model</span>
+                  <span>Enabled</span>
+                  <span className="w-6" />
+                </div>
+              )}
               {draft.agents.map((a, i) => (
                 <div
                   key={i}
@@ -842,7 +918,7 @@ function ConfigView({
                   <input
                     className={inputCls + ' w-32'}
                     value={a.id}
-                    placeholder="id"
+                    placeholder="agent id"
                     onChange={(e) => {
                       const next = draft.agents.slice()
                       next[i] = { ...a, id: e.target.value }
@@ -852,7 +928,7 @@ function ConfigView({
                   <input
                     className={inputCls + ' flex-1'}
                     value={a.default_model ?? ''}
-                    placeholder="default_model (blank = agent default)"
+                    placeholder="Default model (blank = agent default)"
                     onChange={(e) => {
                       const next = draft.agents.slice()
                       next[i] = { ...a, default_model: e.target.value }
@@ -860,7 +936,7 @@ function ConfigView({
                     }}
                   />
                   <Toggle
-                    label="enabled"
+                    label=""
                     value={a.enabled}
                     onChange={(v) => {
                       const next = draft.agents.slice()
