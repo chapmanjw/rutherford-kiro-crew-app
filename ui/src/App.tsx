@@ -101,30 +101,41 @@ export default function Rutherford() {
   const [panels, setPanels] = useState<PanelsResp | null>(null)
   const [roles, setRoles] = useState<RolesResp | null>(null)
 
-  // Monotonic request id for /config fetches. Every config fetch stamps the id
-  // it was issued under and the scope it asked for; a response is applied ONLY
-  // if it is still the latest issued request AND its echoed scope matches the
-  // scope we currently want. This is the latest-wins guard that stops a
-  // superseded / out-of-order fetch from landing the wrong scope's payload into
-  // `config` (the root cause of the Global-shows-empty race).
-  const configReqRef = useRef(0)
+  // Latest-wins keyed on the REQUESTED SCOPE, not a monotonic counter. A
+  // monotonic ++id is bumped by ANY re-render/StrictMode double-invoke that
+  // re-runs the fetch effect, so an earlier in-flight response is seen as
+  // "superseded" and dropped; if every response keeps getting superseded,
+  // setConfig NEVER runs and the render gate (scopeReady) sits on
+  // "Loading…" forever (the deadlock). Instead we record only the scope the
+  // user currently wants: a response is applied iff its requested scope still
+  // equals the wanted scope. Two same-scope fetches never supersede each other,
+  // so at least one same-scope response ALWAYS lands. We drop only when the user
+  // has since switched to a DIFFERENT scope.
+  const configScopeRef = useRef<'global' | 'workspace'>('global')
 
   // Owns ALL /config fetching. Kept OUT of loadAll's parallel batch so a scope
-  // toggle never re-fires the whole status/panels/roles batch. The backend
-  // response is a Meta whose `scope` field echoes the scope it resolved, so we
-  // drop any response whose scope !== the requested scope as a second belt.
+  // toggle never re-fires the whole status/panels/roles batch.
   const fetchConfig = useCallback(
     async (scope: 'global' | 'workspace') => {
-      const reqId = ++configReqRef.current
+      // Record the scope this call is asking for; this is what we arbitrate on.
+      configScopeRef.current = scope
       try {
         const c = (await api.get(`${BASE}/config?scope=${scope}`)) as ConfigResp | null
-        // Superseded by a newer request → drop.
-        if (reqId !== configReqRef.current) return
-        // Wrong scope echoed back (out-of-order / mismatched) → drop.
-        if (!c || (c as ConfigResp).scope !== scope) return
-        setConfig(c)
+        // The user switched to a DIFFERENT scope while we were in flight → drop.
+        // (A same-scope re-run is NOT a supersede, so it can never deadlock.)
+        if (configScopeRef.current !== scope) return
+        if (!c || typeof c !== 'object') {
+          // Resolved null/empty for the scope we still want → surface it as an
+          // error rather than sitting on "Loading…" forever.
+          setErr(`No config returned for ${scope} scope.`)
+          return
+        }
+        // Stamp the requested scope so the render guard (config.scope === scope)
+        // can't be defeated by a missing/mismatched backend `scope` field.
+        setConfig({ ...(c as ConfigResp), scope })
+        setErr(null)
       } catch (e) {
-        if (reqId !== configReqRef.current) return
+        if (configScopeRef.current !== scope) return
         setErr(e instanceof Error ? e.message : String(e))
       }
     },
@@ -209,10 +220,12 @@ export default function Rutherford() {
       }
 
       // Confirmed persisted: reseed from the authoritative server payload.
-      // Bump the request sequence so any in-flight scope fetch issued earlier is
-      // now stale and cannot overwrite this just-saved payload.
-      configReqRef.current++
-      setConfig(confirmed)
+      // Re-assert the wanted scope so any in-flight fetch for a DIFFERENT scope
+      // cannot overwrite this just-saved payload, and stamp the scope on config
+      // so the render guard stays satisfied.
+      const savedScope = (confirmed.scope as 'global' | 'workspace') ?? configScopeRef.current
+      configScopeRef.current = savedScope
+      setConfig({ ...confirmed, scope: savedScope })
       // Refresh Overview roster/defaults too.
       try {
         const s = await api.get(`${BASE}/status`)
