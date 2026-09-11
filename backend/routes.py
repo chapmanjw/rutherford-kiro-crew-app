@@ -57,31 +57,79 @@ def _home() -> Path:
     return Path.home()
 
 
-def _global_config_dir() -> Path:
-    """Directory holding the global config.toml / acp.json, per-platform.
+def _global_config_dir_candidates() -> list[Path]:
+    """Candidate directories that may hold the global config.toml / acp.json,
+    in resolution order, per-platform.
 
-    Windows: %APPDATA%\\rutherford
-    Linux/macOS: $XDG_CONFIG_HOME/rutherford, else ~/.config/rutherford
+    Windows: %APPDATA%\\rutherford, then %USERPROFILE%\\AppData\\Roaming\\rutherford,
+    then Path.home()/AppData/Roaming/rutherford. These usually coincide, but the
+    fallbacks matter when the gateway process has a WRONG or absent APPDATA:
+    APPDATA being *set but wrong* never triggers a Path.home()-only fallback, so
+    we probe the home-derived paths explicitly and pick the first that exists.
+
+    Linux/macOS: $XDG_CONFIG_HOME/rutherford, then ~/.config/rutherford.
     """
+    candidates: list[Path] = []
     if _PLATFORM.startswith("win"):
         appdata = os.environ.get("APPDATA")
-        base = Path(appdata) if appdata else _home() / "AppData" / "Roaming"
-        return base / "rutherford"
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(xdg) if xdg else _home() / ".config"
-    return base / "rutherford"
+        if appdata:
+            candidates.append(Path(appdata) / "rutherford")
+        userprofile = os.environ.get("USERPROFILE")
+        if userprofile:
+            candidates.append(
+                Path(userprofile) / "AppData" / "Roaming" / "rutherford"
+            )
+        candidates.append(_home() / "AppData" / "Roaming" / "rutherford")
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        if xdg:
+            candidates.append(Path(xdg) / "rutherford")
+        candidates.append(_home() / ".config" / "rutherford")
+    # De-dupe while preserving order (APPDATA/USERPROFILE/home frequently coincide).
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for c in candidates:
+        key = str(c)
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    return unique
+
+
+def _global_config_dir() -> Path:
+    """The global config directory to display / write under.
+
+    Returns the FIRST candidate whose config.toml already exists (so the READ
+    surfaces the real file even under a wrong/absent APPDATA), else the FIRST
+    (canonical) candidate for display / creation.
+    """
+    candidates = _global_config_dir_candidates()
+    for d in candidates:
+        if (d / "config.toml").is_file():
+            return d
+    return candidates[0]
 
 
 def _global_config_path() -> Path:
     """Global Rutherford config.toml.
 
     RUTHERFORD_CONFIG, when set, REPLACES file discovery and points directly at
-    the config file (surfaced separately as an env override).
+    the config file (surfaced separately as an env override). Otherwise return
+    the first candidate config.toml that EXISTS across the platform's config-dir
+    candidates, else the canonical location. This is the SINGLE resolver shared
+    by the GET read layer and the PUT write layer (via _resolve_config_path), so
+    a Save always targets the same real file the read reported and never creates
+    a stray under a wrong APPDATA path.
     """
     override = os.environ.get("RUTHERFORD_CONFIG")
     if override:
         return Path(override)
-    return _global_config_dir() / "config.toml"
+    for d in _global_config_dir_candidates():
+        candidate = d / "config.toml"
+        if candidate.is_file():
+            return candidate
+    # None exist yet — canonical location for display / first-time creation.
+    return _global_config_dir_candidates()[0] / "config.toml"
 
 
 # Project-scope config candidates, in resolution order.
