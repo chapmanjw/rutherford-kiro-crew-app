@@ -29,7 +29,8 @@ import os
 import sys
 import tempfile
 import tomllib
-from datetime import date
+import traceback
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,65 @@ from kiro_crew.apps.route_registry import AppRoute
 # --------------------------------------------------------------------------
 
 _PLATFORM = sys.platform  # "win32" | "darwin" | "linux"
+
+# --------------------------------------------------------------------------
+# Live per-request diagnostics (INSTRUMENTATION — feat/v2-config-ui debug)
+# --------------------------------------------------------------------------
+# The offline resolver proved correct across 8 rounds, yet the LIVE gateway
+# process reports the global config as "not present". The only thing offline
+# tests cannot reproduce is the gateway process's REAL request-time environment
+# (APPDATA / USERPROFILE / cwd / RUTHERFORD_CONFIG) and any swallowed exception.
+# This appends one block per request to a fixed debug file so the parent can
+# read the ground truth after the user opens Config -> Global.
+
+_CONFIG_DEBUG_LOG = Path(
+    r"C:\Users\chapm\.kiro\crew\apps\rutherford\_config_debug.log"
+)
+
+
+def _config_debug(kind: str, lines: list[str]) -> None:
+    """Append a timestamped diagnostic block to the debug log. Never raises."""
+    try:
+        _CONFIG_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().isoformat(timespec="milliseconds")
+        block = [f"===== {kind} @ {stamp} ====="]
+        block.extend(lines)
+        block.append("")  # trailing blank line between blocks
+        with _CONFIG_DEBUG_LOG.open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(block) + "\n")
+    except Exception:  # noqa: BLE001 — diagnostics must never break a request
+        pass
+
+
+def _request_env_lines(scope: str) -> list[str]:
+    """The env/cwd/path snapshot that offline tests cannot reproduce."""
+    lines = [
+        f"requested scope: {scope!r}",
+        f"os.getcwd(): {os.getcwd()!r}",
+        f"APPDATA: {os.environ.get('APPDATA')!r}",
+        f"USERPROFILE: {os.environ.get('USERPROFILE')!r}",
+        f"RUTHERFORD_CONFIG: {os.environ.get('RUTHERFORD_CONFIG')!r}",
+        f"Path.home(): {str(Path.home())!r}",
+    ]
+    try:
+        candidates = _global_config_dir_candidates()
+        lines.append("global candidates:")
+        for c in candidates:
+            cfg = c / "config.toml"
+            lines.append(f"  - {str(cfg)!r} is_file={cfg.is_file()}")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"  candidate enumeration failed: {type(exc).__name__}: {exc}")
+    try:
+        resolved = _resolve_config_path(scope)
+        lines.append(f"resolved path ({scope}): {str(resolved)!r} is_file={resolved.is_file()}")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"resolve failed: {type(exc).__name__}: {exc}")
+    try:
+        gpath = _global_config_path()
+        lines.append(f"_global_config_path(): {str(gpath)!r} is_file={gpath.is_file()}")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"_global_config_path failed: {type(exc).__name__}: {exc}")
+    return lines
 
 
 def _platform_label() -> str:
@@ -456,22 +516,35 @@ async def _handle_config(request: web.Request, ctx: AppContext) -> web.Response:
             status=400,
         )
 
-    path = _resolve_config_path(scope)
-    data, error = _read_toml(path)
-    payload: dict[str, Any] = {**_meta(path, scope)}
-    if error:
-        payload["error"] = error
-    payload["config"] = data
-    payload["agents"] = _parse_agents(data)
-    # Convenience: surface pathsep-joined settings pre-split for the UI.
-    payload["derived"] = {
-        "enabled_agents": _split_pathsep(data.get("enabled_agents", [])),
-        "trusted_workspaces": _split_pathsep(data.get("trusted_workspaces", [])),
-        "role_dirs": _split_pathsep(data.get("role_dirs", [])),
-    }
-    payload["acp"] = _acp_sources()
-    payload["env_overrides"] = _env_overrides()
-    return web.json_response(payload)
+    _config_debug("GET /config", _request_env_lines(scope))
+
+    try:
+        path = _resolve_config_path(scope)
+        data, error = _read_toml(path)
+        payload: dict[str, Any] = {**_meta(path, scope)}
+        if error:
+            payload["error"] = error
+        payload["config"] = data
+        payload["agents"] = _parse_agents(data)
+        # Convenience: surface pathsep-joined settings pre-split for the UI.
+        payload["derived"] = {
+            "enabled_agents": _split_pathsep(data.get("enabled_agents", [])),
+            "trusted_workspaces": _split_pathsep(data.get("trusted_workspaces", [])),
+            "role_dirs": _split_pathsep(data.get("role_dirs", [])),
+        }
+        payload["acp"] = _acp_sources()
+        payload["env_overrides"] = _env_overrides()
+        _config_debug(
+            "GET /config OK",
+            [f"path={str(path)!r}", f"exists={path.is_file()}", f"read_error={error!r}"],
+        )
+        return web.json_response(payload)
+    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
+        tb = traceback.format_exc()
+        _config_debug("GET /config EXCEPTION", [f"{type(exc).__name__}: {exc}", tb])
+        return web.json_response(
+            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
+        )
 
 
 async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Response:
@@ -483,59 +556,80 @@ async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Res
             status=400,
         )
 
-    try:
-        body = await request.json()
-    except (ValueError, TypeError) as exc:
-        return web.json_response(
-            {"error": f"invalid JSON body: {exc}"}, status=400
-        )
-
-    clean, verr = _validate_write_body(body)
-    if verr is not None:
-        return web.json_response({"error": verr}, status=400)
-    assert clean is not None
-
-    # Only ever write the resolved global/workspace config.toml path. The path
-    # comes from our own resolver, never from the request, so traversal cannot
-    # steer it — but we defensively confirm the target is named config.toml
-    # inside its resolved parent and reject anything else.
-    path = _resolve_config_path(scope)
-    resolved = path.resolve()
-    if resolved.name != "config.toml":
-        return web.json_response(
-            {"error": "refusing to write a non config.toml target"}, status=400
-        )
-    # Reject an obvious traversal attempt smuggled via RUTHERFORD_CONFIG.
-    if ".." in Path(os.environ.get("RUTHERFORD_CONFIG", "")).parts:
-        return web.json_response(
-            {"error": "path traversal in RUTHERFORD_CONFIG is rejected"},
-            status=400,
-        )
+    _config_debug("PUT /config", _request_env_lines(scope))
 
     try:
-        _atomic_write_toml(path, clean)
-    except ValueError as exc:
-        return web.json_response({"error": str(exc)}, status=400)
-    except OSError as exc:
-        return web.json_response(
-            {"error": f"{type(exc).__name__}: {exc}"}, status=500
-        )
+        try:
+            body = await request.json()
+        except (ValueError, TypeError) as exc:
+            _config_debug("PUT /config BAD JSON", [f"{type(exc).__name__}: {exc}"])
+            return web.json_response(
+                {"error": f"invalid JSON body: {exc}"}, status=400
+            )
 
-    # Re-read and return the fresh structured payload so the UI can update in place.
-    data, error = _read_toml(path)
-    payload: dict[str, Any] = {**_meta(path, scope), "written": True}
-    if error:
-        payload["error"] = error
-    payload["config"] = data
-    payload["agents"] = _parse_agents(data)
-    payload["derived"] = {
-        "enabled_agents": _split_pathsep(data.get("enabled_agents", [])),
-        "trusted_workspaces": _split_pathsep(data.get("trusted_workspaces", [])),
-        "role_dirs": _split_pathsep(data.get("role_dirs", [])),
-    }
-    payload["acp"] = _acp_sources()
-    payload["env_overrides"] = _env_overrides()
-    return web.json_response(payload)
+        clean, verr = _validate_write_body(body)
+        if verr is not None:
+            _config_debug("PUT /config VALIDATION", [f"error={verr!r}"])
+            return web.json_response({"error": verr}, status=400)
+        assert clean is not None
+
+        # Only ever write the resolved global/workspace config.toml path. The
+        # path comes from our own resolver, never from the request, so traversal
+        # cannot steer it — but we defensively confirm the target is named
+        # config.toml inside its resolved parent and reject anything else.
+        path = _resolve_config_path(scope)
+        resolved = path.resolve()
+        _config_debug(
+            "PUT /config target",
+            [f"path={str(path)!r}", f"resolved={str(resolved)!r}", f"parent_exists={path.parent.is_dir()}"],
+        )
+        if resolved.name != "config.toml":
+            return web.json_response(
+                {"error": "refusing to write a non config.toml target"}, status=400
+            )
+        # Reject an obvious traversal attempt smuggled via RUTHERFORD_CONFIG.
+        if ".." in Path(os.environ.get("RUTHERFORD_CONFIG", "")).parts:
+            return web.json_response(
+                {"error": "path traversal in RUTHERFORD_CONFIG is rejected"},
+                status=400,
+            )
+
+        try:
+            _atomic_write_toml(path, clean)
+        except ValueError as exc:
+            _config_debug("PUT /config WRITE ValueError", [f"{type(exc).__name__}: {exc}", traceback.format_exc()])
+            return web.json_response({"error": str(exc)}, status=400)
+        except OSError as exc:
+            _config_debug("PUT /config WRITE OSError", [f"{type(exc).__name__}: {exc}", traceback.format_exc()])
+            return web.json_response(
+                {"error": f"{type(exc).__name__}: {exc}"}, status=500
+            )
+
+        # Re-read and return the fresh structured payload so the UI can update.
+        data, error = _read_toml(path)
+        payload: dict[str, Any] = {**_meta(path, scope), "written": True}
+        if error:
+            payload["error"] = error
+        payload["config"] = data
+        payload["agents"] = _parse_agents(data)
+        payload["derived"] = {
+            "enabled_agents": _split_pathsep(data.get("enabled_agents", [])),
+            "trusted_workspaces": _split_pathsep(data.get("trusted_workspaces", [])),
+            "role_dirs": _split_pathsep(data.get("role_dirs", [])),
+        }
+        payload["acp"] = _acp_sources()
+        payload["env_overrides"] = _env_overrides()
+        _config_debug(
+            "PUT /config OK",
+            [f"path={str(path)!r}", f"exists={path.is_file()}", f"read_error={error!r}"],
+        )
+        return web.json_response(payload)
+    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
+        tb = traceback.format_exc()
+        _config_debug("PUT /config EXCEPTION", [f"{type(exc).__name__}: {exc}", tb])
+        return web.json_response(
+            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
+        )
 
 
 async def _handle_status(request: web.Request, ctx: AppContext) -> web.Response:
