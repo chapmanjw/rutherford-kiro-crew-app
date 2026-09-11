@@ -11,7 +11,7 @@ import lucide from 'lucide-react'
 // `from 'lucide-react'` imports.
 const {
   Box, FileCog, Layers, UserSquare, RefreshCw, AlertTriangle,
-  Save, Plus, X, CheckCircle2, Server,
+  Save, Plus, X, CheckCircle2, Server, Trash2,
 } = lucide
 
 const BASE = '/api/apps/rutherford'
@@ -52,10 +52,36 @@ type ConfigResp = Meta & {
   written?: boolean
 }
 
+type PanelSeat = {
+  cli: string
+  model?: string
+  role?: string
+  label?: string
+  weight?: number | string
+  parity?: boolean
+  stance?: string
+  [k: string]: unknown
+}
+
+type PanelRec = {
+  name: string
+  description: string
+  strategy: string
+  targets: number | null
+  seats?: PanelSeat[]
+  extra?: Record<string, unknown>
+}
+
+type PanelSource = Meta & { panels: PanelRec[] }
+
 type PanelsResp = {
   platform: string
-  sources: (Meta & { panels: { name: string; description: string; strategy: string; targets: number | null }[] })[]
+  sources: PanelSource[]
 }
+
+// Echoed shape from PUT /rutherford-panels (single scope) — carries written===true
+// on a confirmed persist, mirroring the config write contract.
+type PanelsWriteResp = Meta & { panels: PanelRec[]; written?: boolean }
 
 type RolesResp = {
   platform: string
@@ -238,6 +264,59 @@ export default function Rutherford() {
     [api],
   )
 
+  // Persist the panels list for one scope, using the SAME confirmed-persistence
+  // discipline as config: the host `put` resolves (does not throw) on a non-OK
+  // response, so we require written===true, retry once through a transient 403,
+  // then fall back to a verify GET that confirms the panel-name set round-tripped
+  // to disk. On failure we throw (the caller keeps the user's edits) and never
+  // report a phantom success.
+  const savePanels = useCallback(
+    async (scope: 'global' | 'workspace', panelsBody: PanelRec[]) => {
+      const url = `${BASE}/rutherford-panels?scope=${scope}`
+      const body = { panels: panelsBody }
+      const wrote = (v: unknown): v is PanelsWriteResp =>
+        !!v && typeof v === 'object' && (v as PanelsWriteResp).written === true
+
+      let resp: unknown = await api.put(url, body)
+      if (!wrote(resp)) {
+        await new Promise((r) => setTimeout(r, 600))
+        resp = await api.put(url, body)
+      }
+
+      let confirmed: PanelsWriteResp | null = wrote(resp) ? (resp as PanelsWriteResp) : null
+      if (!confirmed) {
+        // Verify GET: /panels returns BOTH scopes; pick the one we wrote and
+        // confirm the panel-name set matches what we sent.
+        const got = (await api.get(`${BASE}/panels`)) as PanelsResp | null
+        const src = got?.sources?.find((s) => s.scope === scope)
+        if (src) {
+          const want = panelsBody.map((p) => p.name).sort()
+          const have = (Array.isArray(src.panels) ? src.panels : []).map((p) => p.name).sort()
+          if (want.length === have.length && want.every((n, i) => n === have[i])) {
+            confirmed = { ...src, written: true }
+          }
+        }
+      }
+
+      if (!confirmed) {
+        throw new Error(
+          'Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your edits were kept; try Save again.',
+        )
+      }
+
+      // Refresh the full panels payload (both scopes) from the authoritative GET
+      // so the other scope stays correct too.
+      try {
+        const fresh = (await api.get(`${BASE}/panels`)) as PanelsResp | null
+        if (fresh && typeof fresh === 'object') setPanels(fresh)
+      } catch {
+        /* non-fatal — the write already confirmed */
+      }
+      return confirmed
+    },
+    [api],
+  )
+
   return (
     <>
       <PageHeader title="Rutherford" subtitle="Config & status — config.toml editing (Phase 2)" />
@@ -286,7 +365,7 @@ export default function Rutherford() {
                 onSave={saveConfig}
               />
             )}
-            {tab === 'panels' && <PanelsView panels={panels} />}
+            {tab === 'panels' && <PanelsView panels={panels} onSave={savePanels} />}
             {tab === 'roles' && <RolesView roles={roles} />}
           </>
         )}
@@ -524,6 +603,64 @@ function StringList({
   )
 }
 
+// An unambiguous switch. Renders a pill TRACK + a KNOB that slides
+// left(off)/right(on); the track is accent-filled when ON and muted/grey when
+// OFF, with a small "ON"/"OFF" text affordance INSIDE the track so state reads
+// at a glance even for a viewer who can't distinguish the accent hue. Proper
+// role="switch" + aria-checked for assistive tech. `srLabel` gives an
+// accessible name to a bare (label-less) switch, e.g. a per-agent Enabled cell.
+function Switch({
+  value,
+  onChange,
+  srLabel,
+}: {
+  value: boolean
+  onChange: (v: boolean) => void
+  srLabel?: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={value}
+      aria-label={srLabel}
+      onClick={() => onChange(!value)}
+      className={
+        'relative inline-flex items-center shrink-0 h-6 w-12 rounded-full ' +
+        'transition-colors duration-150 outline-none ' +
+        'focus-visible:ring-2 focus-visible:ring-[var(--accent,#6366f1)] focus-visible:ring-offset-1 ' +
+        'focus-visible:ring-offset-[var(--surface,#111)] border ' +
+        (value
+          ? 'bg-[var(--accent,#6366f1)] border-[var(--accent,#6366f1)]'
+          : 'bg-[var(--surface-3,#3a3a3a)] border-[var(--border,#4a4a4a)]')
+      }
+    >
+      {/* State text affordance: ON hugs the left under the knob-at-right; OFF
+          hugs the right under the knob-at-left. */}
+      <span
+        className={
+          'absolute text-[9px] font-semibold leading-none tracking-wide select-none ' +
+          (value ? 'left-1.5 text-white' : 'right-1.5 text-[var(--fg,#eee)] opacity-70')
+        }
+        aria-hidden="true"
+      >
+        {value ? 'ON' : 'OFF'}
+      </span>
+      {/* Sliding knob */}
+      <span
+        className={
+          'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm ' +
+          'transition-all duration-150 ' +
+          (value ? 'left-[26px]' : 'left-0.5')
+        }
+        aria-hidden="true"
+      />
+    </button>
+  )
+}
+
+// A labelled switch row: the Switch plus its human label / config-key hint /
+// description. Used for the Defaults toggles.
 function Toggle({
   label,
   hint,
@@ -538,22 +675,10 @@ function Toggle({
   onChange: (v: boolean) => void
 }) {
   return (
-    <label className="flex items-start gap-2 cursor-pointer">
-      <button
-        type="button"
-        onClick={() => onChange(!value)}
-        className={
-          'mt-0.5 shrink-0 w-9 h-5 rounded-full transition-colors relative ' +
-          (value ? 'bg-[var(--accent,#6366f1)]' : 'bg-[var(--surface-3,#333)]')
-        }
-      >
-        <span
-          className={
-            'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ' +
-            (value ? 'left-4' : 'left-0.5')
-          }
-        />
-      </button>
+    <label className="flex items-start gap-2.5 cursor-pointer">
+      <span className="mt-0.5">
+        <Switch value={value} onChange={onChange} srLabel={label || undefined} />
+      </span>
       <span className="flex flex-col">
         <span className="text-sm text-[var(--fg,#eee)]">
           {label}
@@ -935,9 +1060,9 @@ function ConfigView({
                       patch({ agents: next })
                     }}
                   />
-                  <Toggle
-                    label=""
+                  <Switch
                     value={a.enabled}
+                    srLabel={`Enabled: ${a.id || 'agent'}`}
                     onChange={(v) => {
                       const next = draft.agents.slice()
                       next[i] = { ...a, enabled: v }
@@ -974,54 +1099,400 @@ function ConfigView({
   )
 }
 
-function PanelsView({ panels }: { panels: PanelsResp | null }) {
-  if (!panels) return <p className="text-sm text-muted">No panels.</p>
-  const sources = Array.isArray(panels.sources) ? panels.sources : []
-  const total = sources.reduce((n, s) => n + (Array.isArray(s.panels) ? s.panels.length : 0), 0)
-  if (total === 0) {
-    return (
-      <Card>
-        <CardTitle>Named panels</CardTitle>
-        <p className="text-sm text-muted mt-1">
-          No <code>panels.toon</code> found (read-only — editing is a later step). Checked:
-        </p>
-        {sources.map((s) => (
-          <PathChip key={s.path} meta={s} />
-        ))}
-      </Card>
-    )
+const STRATEGIES = [
+  'all-voices',
+  'unanimous',
+  'majority',
+  'plurality',
+  'weighted',
+  'parity-pair',
+  'rank',
+] as const
+
+// Seat keys we surface as first-class editable fields. Any OTHER key present on
+// a seat (an unknown/future key) is carried through untouched on save — never
+// dropped — because the editor deep-clones the whole seat object.
+const SEAT_FIELDS: { key: keyof PanelSeat; label: string; placeholder: string }[] = [
+  { key: 'cli', label: 'cli', placeholder: 'agent id (required)' },
+  { key: 'model', label: 'model', placeholder: 'agent default' },
+  { key: 'role', label: 'role', placeholder: 'persona id' },
+  { key: 'label', label: 'label', placeholder: 'result key' },
+  { key: 'stance', label: 'stance', placeholder: 'for / against / neutral' },
+]
+
+// Deep-clone a panel into an editable draft, preserving every seat key.
+function clonePanel(p: PanelRec): PanelRec {
+  return {
+    ...p,
+    seats: (Array.isArray(p.seats) ? p.seats : []).map((s) => ({ ...s })),
+    extra: { ...(p.extra || {}) },
   }
+}
+
+function emptyPanel(): PanelRec {
+  return {
+    name: '',
+    description: '',
+    strategy: 'all-voices',
+    targets: 1,
+    seats: [{ cli: '' }],
+    extra: {},
+  }
+}
+
+// Build the write body: strip empty-string optional seat fields (so we don't
+// serialize blank keys) while preserving unknown keys. `cli` is always kept.
+function panelsToBody(drafts: PanelRec[]): PanelRec[] {
+  return drafts.map((p) => ({
+    name: p.name.trim(),
+    description: (p.description || '').trim(),
+    strategy: (p.strategy || '').trim(),
+    targets: (p.seats || []).length,
+    extra: p.extra || {},
+    seats: (p.seats || []).map((s) => {
+      const out: PanelSeat = { cli: String(s.cli || '').trim() }
+      for (const [k, v] of Object.entries(s)) {
+        if (k === 'cli') continue
+        if (v === undefined || v === null) continue
+        if (typeof v === 'string') {
+          const t = v.trim()
+          if (t !== '') out[k] = t
+        } else {
+          out[k] = v as never
+        }
+      }
+      return out
+    }),
+  }))
+}
+
+function SeatEditor({
+  seat,
+  onChange,
+  onRemove,
+}: {
+  seat: PanelSeat
+  onChange: (s: PanelSeat) => void
+  onRemove: () => void
+}) {
+  const set = (k: keyof PanelSeat, v: string) => onChange({ ...seat, [k]: v })
+  // Unknown keys (anything not a surfaced field) — shown read-only so the user
+  // knows they're preserved on save.
+  const surfaced = new Set<string>([...SEAT_FIELDS.map((f) => f.key as string), 'weight', 'parity'])
+  const unknownKeys = Object.keys(seat).filter((k) => !surfaced.has(k))
+  return (
+    <div className="p-2.5 rounded bg-[var(--surface-3,#232323)] border border-[var(--border,#2a2a2a)]">
+      <div className="grid gap-2 grid-cols-[repeat(auto-fit,minmax(140px,1fr))]">
+        {SEAT_FIELDS.map((f) => (
+          <label key={f.key as string} className="flex flex-col gap-0.5">
+            <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">
+              {f.label}
+              {f.key === 'cli' && <span className="text-amber-500"> *</span>}
+            </span>
+            <input
+              className={inputCls}
+              value={seat[f.key] != null ? String(seat[f.key]) : ''}
+              placeholder={f.placeholder}
+              onChange={(e) => set(f.key, e.target.value)}
+            />
+          </label>
+        ))}
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">weight</span>
+          <input
+            className={inputCls}
+            type="number"
+            value={seat.weight != null ? String(seat.weight) : ''}
+            placeholder="—"
+            onChange={(e) => {
+              const v = e.target.value.trim()
+              const next = { ...seat }
+              if (v === '') delete next.weight
+              else next.weight = Number(v)
+              onChange(next)
+            }}
+          />
+        </label>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">parity</span>
+          <span className="mt-0.5">
+            <Switch
+              value={seat.parity === true}
+              srLabel="Parity counterweight seat"
+              onChange={(v) => {
+                const next = { ...seat }
+                if (v) next.parity = true
+                else delete next.parity
+                onChange(next)
+              }}
+            />
+          </span>
+        </div>
+      </div>
+      {unknownKeys.length > 0 && (
+        <p className="text-[10px] text-muted mt-1.5">
+          preserved on save:{' '}
+          {unknownKeys.map((k) => (
+            <code key={k} className="mr-1.5">
+              {k}={String(seat[k])}
+            </code>
+          ))}
+        </p>
+      )}
+      <button
+        className="mt-1.5 flex items-center gap-1 text-[11px] text-muted hover:text-amber-500"
+        onClick={onRemove}
+        title="Remove seat"
+      >
+        <X size={12} /> Remove seat
+      </button>
+    </div>
+  )
+}
+
+function PanelEditor({
+  panel,
+  onChange,
+  onDelete,
+}: {
+  panel: PanelRec
+  onChange: (p: PanelRec) => void
+  onDelete: () => void
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const seats = Array.isArray(panel.seats) ? panel.seats : []
+  return (
+    <div className="p-3 rounded bg-[var(--surface-2,#1e1e1e)] border border-[var(--border,#2a2a2a)]">
+      <div className="grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
+        <Field label="Name" hint="panel key">
+          <input
+            className={inputCls}
+            value={panel.name}
+            placeholder="panel-name"
+            onChange={(e) => onChange({ ...panel, name: e.target.value })}
+          />
+        </Field>
+        <Field label="Strategy" hint="strategy">
+          <select
+            className={inputCls}
+            value={panel.strategy || 'all-voices'}
+            onChange={(e) => onChange({ ...panel, strategy: e.target.value })}
+          >
+            {STRATEGIES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="mt-2.5">
+        <Field label="Description" hint="description">
+          <input
+            className={inputCls}
+            value={panel.description || ''}
+            placeholder="Human label for this panel"
+            onChange={(e) => onChange({ ...panel, description: e.target.value })}
+          />
+        </Field>
+      </div>
+
+      <div className="mt-3">
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="text-xs font-medium text-[var(--fg,#eee)]">
+            Seats <span className="text-muted">({seats.length})</span>
+          </span>
+        </div>
+        <div className="flex flex-col gap-2">
+          {seats.map((s, i) => (
+            <SeatEditor
+              key={i}
+              seat={s}
+              onChange={(ns) => {
+                const next = seats.slice()
+                next[i] = ns
+                onChange({ ...panel, seats: next })
+              }}
+              onRemove={() => onChange({ ...panel, seats: seats.filter((_, j) => j !== i) })}
+            />
+          ))}
+          <button
+            className="flex items-center gap-1.5 px-2 py-1.5 text-sm text-muted hover:text-[var(--accent,#6366f1)] self-start"
+            onClick={() => onChange({ ...panel, seats: [...seats, { cli: '' }] })}
+          >
+            <Plus size={14} /> Add seat
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-3 pt-2.5 border-t border-[var(--border,#2a2a2a)] flex items-center">
+        {!confirmDelete ? (
+          <button
+            className="flex items-center gap-1.5 text-xs text-muted hover:text-amber-500"
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 size={13} /> Delete panel
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-amber-500">Delete “{panel.name || 'unnamed'}”?</span>
+            <button
+              className="px-2 py-0.5 rounded bg-amber-600/80 text-white hover:bg-amber-600"
+              onClick={onDelete}
+            >
+              Delete
+            </button>
+            <button className="px-2 py-0.5 rounded text-muted hover:text-[var(--fg,#eee)]" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PanelsView({
+  panels,
+  onSave,
+}: {
+  panels: PanelsResp | null
+  onSave: (scope: 'global' | 'workspace', body: PanelRec[]) => Promise<PanelsWriteResp>
+}) {
+  const [scope, setScope] = useState<'global' | 'workspace'>('global')
+  const [drafts, setDrafts] = useState<PanelRec[] | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const sources = Array.isArray(panels?.sources) ? panels!.sources : []
+  const source = sources.find((s) => s.scope === scope) || null
+  // Serialize the CURRENT scope's server panels to a stable key so the effect
+  // reseeds the draft only when the underlying data (or scope) actually changes,
+  // never on every render.
+  const sourceKey = JSON.stringify(source?.panels ?? null) + '|' + scope
+
+  useEffect(() => {
+    if (!source) {
+      setDrafts(null)
+      return
+    }
+    setSaveMsg(null)
+    setDrafts((source.panels || []).map(clonePanel))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey])
+
+  const patchPanel = (i: number, p: PanelRec) =>
+    setDrafts((d) => (d ? d.map((x, j) => (j === i ? p : x)) : d))
+
+  const validationError = (): string | null => {
+    if (!drafts) return null
+    const names = new Set<string>()
+    for (const p of drafts) {
+      const n = p.name.trim()
+      if (!n) return 'Every panel needs a name.'
+      if (names.has(n)) return `Duplicate panel name “${n}”.`
+      names.add(n)
+      const seats = Array.isArray(p.seats) ? p.seats : []
+      if (seats.length === 0) return `Panel “${n}” needs at least one seat.`
+      if (seats.some((s) => !String(s.cli || '').trim()))
+        return `Panel “${n}” has a seat missing a cli.`
+    }
+    return null
+  }
+
+  const handleSave = async () => {
+    if (!drafts) return
+    const verr = validationError()
+    if (verr) {
+      setSaveMsg({ ok: false, text: verr })
+      return
+    }
+    setSaving(true)
+    setSaveMsg(null)
+    try {
+      await onSave(scope, panelsToBody(drafts))
+      setSaveMsg({ ok: true, text: `Saved to ${scope} panels.toon (backup written).` })
+    } catch (e) {
+      setSaveMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <>
-      {sources.map((s) => {
-        const sp = Array.isArray(s.panels) ? s.panels : []
-        return sp.length === 0 ? null : (
-          <div key={s.path} className="mb-4">
-            <Card>
-              <CardTitle>Panels · {s.scope} (read-only)</CardTitle>
-              <PathChip meta={s} />
-              <div className="mt-3 flex flex-col gap-2">
-                {sp.map((p) => (
-                  <div key={p.name} className="p-3 rounded bg-[var(--surface-2,#1e1e1e)]">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-[var(--fg,#eee)]">{p.name}</span>
-                      {p.strategy && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-[var(--surface-3,#333)] text-muted">
-                          {p.strategy}
-                        </span>
-                      )}
-                      {p.targets != null && (
-                        <span className="text-[10px] text-muted">{p.targets} voices</span>
-                      )}
-                    </div>
-                    {p.description && <p className="text-xs text-muted mt-1">{p.description}</p>}
-                  </div>
-                ))}
-              </div>
-            </Card>
+      <div className="flex items-center gap-1 mb-4">
+        {(['global', 'workspace'] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setScope(s)}
+            className={
+              'px-3 py-1.5 text-sm rounded transition-colors ' +
+              (scope === s
+                ? 'bg-[var(--accent,#6366f1)] text-white'
+                : 'bg-[var(--surface-2,#2a2a2a)] text-muted hover:text-[var(--fg,#eee)]')
+            }
+          >
+            {s === 'global' ? 'Global' : 'Workspace'}
+          </button>
+        ))}
+        <button
+          onClick={() => void handleSave()}
+          disabled={saving || !drafts}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-[var(--accent,#6366f1)] text-white disabled:opacity-50"
+        >
+          <Save size={14} /> {saving ? 'Saving…' : `Save ${scope}`}
+        </button>
+      </div>
+
+      {saveMsg && (
+        <div
+          className={
+            'flex items-center gap-2 text-sm mb-4 ' +
+            (saveMsg.ok ? 'text-green-500' : 'text-amber-500')
+          }
+        >
+          {saveMsg.ok ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+          {saveMsg.text}
+        </div>
+      )}
+
+      <Card>
+        <CardTitle>Named panels · {scope}</CardTitle>
+        {source && <PathChip meta={source} />}
+        {source?.error && <p className="text-xs text-amber-500 mt-1">{source.error}</p>}
+        {source && !source.exists && (
+          <p className="text-xs text-muted mt-2">
+            No file at this scope yet — saving creates <code>{source.path}</code>.
+          </p>
+        )}
+
+        {drafts === null ? (
+          <p className="text-sm text-muted mt-2">Loading {scope} panels…</p>
+        ) : (
+          <div className="mt-3 flex flex-col gap-3">
+            {drafts.length === 0 && (
+              <p className="text-sm text-muted">
+                No panels defined at this scope. Add one below.
+              </p>
+            )}
+            {drafts.map((p, i) => (
+              <PanelEditor
+                key={i}
+                panel={p}
+                onChange={(np) => patchPanel(i, np)}
+                onDelete={() => setDrafts((d) => (d ? d.filter((_, j) => j !== i) : d))}
+              />
+            ))}
+            <button
+              className="flex items-center gap-1.5 px-2 py-1.5 text-sm text-muted hover:text-[var(--accent,#6366f1)] self-start"
+              onClick={() => setDrafts((d) => [...(d || []), emptyPanel()])}
+            >
+              <Plus size={14} /> Add panel
+            </button>
           </div>
-        )
-      })}
+        )}
+      </Card>
     </>
   )
 }

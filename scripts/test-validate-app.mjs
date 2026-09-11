@@ -27,7 +27,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // Files/dirs a validation run actually touches. Copying just these keeps each fixture cheap and
 // avoids dragging the 1.5 MB docs/images/logo.png and .git into every temp copy.
-const COPY_ENTRIES = ["app.json", "app-registry.json", "agents", "skills", "scripts", "assets", "reference", "examples"];
+const COPY_ENTRIES = ["app.json", "app-registry.json", "agents", "skills", "scripts", "assets", "reference", "examples", "backend"];
 
 let passed = 0;
 let failed = 0;
@@ -412,6 +412,57 @@ testCase(
       { name: "rutherford", repo: "https://github.com/chapmanjw/rutherford-kiro-crew-app", branch: "main" },
     ]);
   },
+);
+
+// --- F4: backend route-contract guard (config + panels write routes, non-reserved paths) ---
+const ROUTES_REL = join("backend", "routes.py");
+const readRoutes = (dir) => readFileSync(join(dir, ROUTES_REL), "utf8");
+const writeRoutes = (dir, text) => writeFileSync(join(dir, ROUTES_REL), text);
+
+// (y) current backend registers both write routes -> pass (covered by (a) too, but explicit here).
+testCase("(y) backend routes.py registers both write routes passes", "pass", null);
+
+// (z) panels write route dropped -> fail
+//     Removes the PUT /rutherford-panels registration line; the guard must fail, proving it
+//     actually requires the panels write surface rather than merely that routes.py exists.
+testCase(
+  "(z) missing PUT /rutherford-panels route fails",
+  "fail",
+  (dir) => {
+    const t = readRoutes(dir).replace(
+      /\s*AppRoute\("PUT",\s*"\/rutherford-panels",[^)]*\),/,
+      "",
+    );
+    writeRoutes(dir, t);
+  },
+  /rutherford-panels/i,
+);
+
+// (aa) a route reverted to the RESERVED bare "/config" path -> fail
+//      Rewrites the config write path to the reserved "/config"; the guard must reject it as a
+//      collision with Kiro Crew's reserved app-config route.
+testCase(
+  '(aa) route at reserved "/config" path fails',
+  "fail",
+  (dir) => {
+    const t = readRoutes(dir).replace(
+      'AppRoute("PUT", "/rutherford-config"',
+      'AppRoute("PUT", "/config"',
+    );
+    writeRoutes(dir, t);
+  },
+  /reserved/i,
+);
+
+// (bb) register_routes removed entirely -> fail
+testCase(
+  "(bb) backend without register_routes fails",
+  "fail",
+  (dir) => {
+    const t = readRoutes(dir).replace(/def\s+register_routes\s*\(/, "def _disabled_register_routes(");
+    writeRoutes(dir, t);
+  },
+  /register_routes/i,
 );
 
 // --- report ---

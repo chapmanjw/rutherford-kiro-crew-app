@@ -452,9 +452,68 @@ if (app === null || typeof app !== "object" || Array.isArray(app)) {
   enforceNamespacedMcpGrants(app);
 }
 
+/**
+ * F4 — backend route-contract guard.
+ *
+ * Kiro Crew RESERVES ``/api/apps/<app>/config`` for its own app-config store, so this app's
+ * config + panels read/write endpoints MUST live at NON-reserved paths under the app base:
+ * reads/writes at ``/rutherford-config`` and ``/rutherford-panels`` (never a bare ``/config``
+ * write). All routes are declared by ``register_routes(ctx) -> list[AppRoute]`` in
+ * ``backend/routes.py``. This guard asserts, dependency-free (a text scan of routes.py):
+ *   - the file exists and defines ``register_routes``,
+ *   - a PUT is registered for BOTH ``/rutherford-config`` and ``/rutherford-panels``
+ *     (the two write surfaces), and
+ *   - NO route path is a reserved bare ``/config`` (any method).
+ * If the panels write route were reverted to a reserved name (or dropped), this fails CI.
+ */
+function enforceBackendRouteContract() {
+  const rel = "backend/routes.py";
+  const path = join(root, rel);
+  if (!existsSync(path)) {
+    fail(`missing file: ${rel} (the app backend route module)`);
+    return;
+  }
+  const text = readFileSync(path, "utf8");
+  if (!/def\s+register_routes\s*\(/.test(text)) {
+    fail(`${rel}: missing register_routes(ctx) -> list[AppRoute] route registration function`);
+    return;
+  }
+  const routes = [];
+  const ROUTE_RE = /AppRoute\(\s*"(GET|PUT|POST|DELETE|PATCH)"\s*,\s*"([^"]+)"/g;
+  for (const m of text.matchAll(ROUTE_RE)) routes.push({ method: m[1], path: m[2] });
+
+  const hasPut = (p) => routes.some((r) => r.method === "PUT" && r.path === p);
+
+  if (!hasPut("/rutherford-config")) {
+    fail(`${rel}: no PUT route registered for "/rutherford-config" (the config write surface)`);
+  }
+  if (!hasPut("/rutherford-panels")) {
+    fail(
+      `${rel}: no PUT route registered for "/rutherford-panels" (the panels write surface). ` +
+        `Panels write must use the NON-reserved "/rutherford-panels" path — Kiro Crew reserves ` +
+        `/api/apps/<app>/config, so a write route must avoid reserved names.`,
+    );
+  }
+
+  for (const r of routes) {
+    if (r.path === "/config") {
+      fail(
+        `${rel}: route ${r.method} "/config" uses the RESERVED app-config path. Kiro Crew reserves ` +
+          `/api/apps/<app>/config for its own store — this app's config endpoints must live at the ` +
+          `non-reserved "/rutherford-config".`,
+      );
+    }
+  }
+}
+
 // Regression guard for the orchestrator's implementation-spawn directive (F2). Runs unconditionally
 // (it does its own existence check on the prompt file) so it fires even if app.json is malformed.
 enforceImplementationAgentDirective();
+
+// Backend route-contract guard (F4): the config + panels write routes must live at their
+// non-reserved paths and never collide with Kiro Crew's reserved /config. Runs unconditionally
+// (its own existence check on backend/routes.py).
+enforceBackendRouteContract();
 
 // Validate the self-listing external-registry index (F3). Runs unconditionally (its own existence
 // check) so it fires even if app.json is malformed; the self-listing name match is skipped when

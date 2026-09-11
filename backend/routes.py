@@ -15,13 +15,24 @@ and surface any ``RUTHERFORD_*`` environment overrides. Always report
 ``{path, scope, platform, exists}`` so the UI can show the native path even
 when the file is absent.
 
-WRITE layer (PUT /config?scope=global|workspace): accept a JSON body, serialize
+WRITE layer (PUT /rutherford-config?scope=global|workspace): accept a JSON body, serialize
 it to TOML (hand-serialized for the limited supported schema; comment
 preservation is intentionally NOT attempted), and write it to the resolved
 config.toml for that scope. Safety: validate the serialized TOML re-parses
 before touching disk, write atomically (temp file in the same dir + os.replace),
-snapshot the prior file to a timestamped ``.bak-YYYY-MM-DD`` first, reject path
+snapshot the prior file to a timestamped ``.bak`` first, reject path
 traversal, and only ever write the resolved global/workspace config.toml path.
+
+PANELS write layer (PUT /rutherford-panels?scope=global|workspace): accept a JSON
+list of panels (or ``{"panels": [...]}``) and serialize it back to valid
+panels.toon (TOON, indentation-based). The path is the NON-reserved
+``/rutherford-panels`` because Kiro Crew reserves ``/api/apps/<app>/config``; any
+NEW write route must likewise avoid reserved names. The serializer round-trips
+every panel field (name/description/strategy + seats with cli/model/role/label/
+weight/parity/stance, and any unknown key it does not surface). Same safety
+envelope as config: a parse→serialize→parse round-trip check before disk, a
+timestamped ``.bak``, an atomic temp-file + os.replace, and only ever the
+resolved scope's panels.toon path.
 """
 from __future__ import annotations
 
@@ -30,7 +41,7 @@ import sys
 import tempfile
 import tomllib
 import traceback
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -44,66 +55,6 @@ from kiro_crew.apps.route_registry import AppRoute
 # --------------------------------------------------------------------------
 
 _PLATFORM = sys.platform  # "win32" | "darwin" | "linux"
-
-# --------------------------------------------------------------------------
-# Live per-request diagnostics (INSTRUMENTATION — feat/v2-config-ui debug)
-# --------------------------------------------------------------------------
-# The offline resolver proved correct across 8 rounds, yet the LIVE gateway
-# process reports the global config as "not present". The only thing offline
-# tests cannot reproduce is the gateway process's REAL request-time environment
-# (APPDATA / USERPROFILE / cwd / RUTHERFORD_CONFIG) and any swallowed exception.
-# This appends one block per request to a fixed debug file so the parent can
-# read the ground truth after the user opens Config -> Global.
-
-_CONFIG_DEBUG_LOG = Path(
-    r"C:\Users\chapm\.kiro\crew\apps\rutherford\_config_debug.log"
-)
-
-
-def _config_debug(kind: str, lines: list[str]) -> None:
-    """Append a timestamped diagnostic block to the debug log. Never raises."""
-    try:
-        _CONFIG_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().isoformat(timespec="milliseconds")
-        block = [f"===== {kind} @ {stamp} ====="]
-        block.extend(lines)
-        block.append("")  # trailing blank line between blocks
-        with _CONFIG_DEBUG_LOG.open("a", encoding="utf-8") as fh:
-            fh.write("\n".join(block) + "\n")
-    except Exception:  # noqa: BLE001 — diagnostics must never break a request
-        pass
-
-
-def _request_env_lines(scope: str) -> list[str]:
-    """The env/cwd/path snapshot that offline tests cannot reproduce."""
-    lines = [
-        f"requested scope: {scope!r}",
-        f"os.getcwd(): {os.getcwd()!r}",
-        f"APPDATA: {os.environ.get('APPDATA')!r}",
-        f"USERPROFILE: {os.environ.get('USERPROFILE')!r}",
-        f"RUTHERFORD_CONFIG: {os.environ.get('RUTHERFORD_CONFIG')!r}",
-        f"Path.home(): {str(Path.home())!r}",
-    ]
-    try:
-        candidates = _global_config_dir_candidates()
-        lines.append("global candidates:")
-        for c in candidates:
-            cfg = c / "config.toml"
-            lines.append(f"  - {str(cfg)!r} is_file={cfg.is_file()}")
-    except Exception as exc:  # noqa: BLE001
-        lines.append(f"  candidate enumeration failed: {type(exc).__name__}: {exc}")
-    try:
-        resolved = _resolve_config_path(scope)
-        lines.append(f"resolved path ({scope}): {str(resolved)!r} is_file={resolved.is_file()}")
-    except Exception as exc:  # noqa: BLE001
-        lines.append(f"resolve failed: {type(exc).__name__}: {exc}")
-    try:
-        gpath = _global_config_path()
-        lines.append(f"_global_config_path(): {str(gpath)!r} is_file={gpath.is_file()}")
-    except Exception as exc:  # noqa: BLE001
-        lines.append(f"_global_config_path failed: {type(exc).__name__}: {exc}")
-    return lines
-
 
 def _platform_label() -> str:
     if _PLATFORM.startswith("win"):
@@ -508,15 +459,13 @@ def _validate_write_body(body: Any) -> tuple[dict[str, Any] | None, str | None]:
 # --------------------------------------------------------------------------
 
 async def _handle_config(request: web.Request, ctx: AppContext) -> web.Response:
-    """GET /config?scope=global|workspace — read-only config viewer payload."""
+    """GET /rutherford-config?scope=global|workspace — config viewer payload."""
     scope = (request.query.get("scope") or "global").lower()
     if scope not in ("global", "workspace"):
         return web.json_response(
             {"error": f"invalid scope {scope!r}; expected global|workspace"},
             status=400,
         )
-
-    _config_debug("GET /config", _request_env_lines(scope))
 
     try:
         path = _resolve_config_path(scope)
@@ -534,21 +483,16 @@ async def _handle_config(request: web.Request, ctx: AppContext) -> web.Response:
         }
         payload["acp"] = _acp_sources()
         payload["env_overrides"] = _env_overrides()
-        _config_debug(
-            "GET /config OK",
-            [f"path={str(path)!r}", f"exists={path.is_file()}", f"read_error={error!r}"],
-        )
         return web.json_response(payload)
     except Exception as exc:  # noqa: BLE001 — surface swallowed errors
         tb = traceback.format_exc()
-        _config_debug("GET /config EXCEPTION", [f"{type(exc).__name__}: {exc}", tb])
         return web.json_response(
             {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
         )
 
 
 async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Response:
-    """PUT /config?scope=global|workspace — write config.toml (Phase 2)."""
+    """PUT /rutherford-config?scope=global|workspace — write config.toml."""
     scope = (request.query.get("scope") or "global").lower()
     if scope not in ("global", "workspace"):
         return web.json_response(
@@ -556,20 +500,16 @@ async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Res
             status=400,
         )
 
-    _config_debug("PUT /config", _request_env_lines(scope))
-
     try:
         try:
             body = await request.json()
         except (ValueError, TypeError) as exc:
-            _config_debug("PUT /config BAD JSON", [f"{type(exc).__name__}: {exc}"])
             return web.json_response(
                 {"error": f"invalid JSON body: {exc}"}, status=400
             )
 
         clean, verr = _validate_write_body(body)
         if verr is not None:
-            _config_debug("PUT /config VALIDATION", [f"error={verr!r}"])
             return web.json_response({"error": verr}, status=400)
         assert clean is not None
 
@@ -579,10 +519,6 @@ async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Res
         # config.toml inside its resolved parent and reject anything else.
         path = _resolve_config_path(scope)
         resolved = path.resolve()
-        _config_debug(
-            "PUT /config target",
-            [f"path={str(path)!r}", f"resolved={str(resolved)!r}", f"parent_exists={path.parent.is_dir()}"],
-        )
         if resolved.name != "config.toml":
             return web.json_response(
                 {"error": "refusing to write a non config.toml target"}, status=400
@@ -597,10 +533,8 @@ async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Res
         try:
             _atomic_write_toml(path, clean)
         except ValueError as exc:
-            _config_debug("PUT /config WRITE ValueError", [f"{type(exc).__name__}: {exc}", traceback.format_exc()])
             return web.json_response({"error": str(exc)}, status=400)
         except OSError as exc:
-            _config_debug("PUT /config WRITE OSError", [f"{type(exc).__name__}: {exc}", traceback.format_exc()])
             return web.json_response(
                 {"error": f"{type(exc).__name__}: {exc}"}, status=500
             )
@@ -619,14 +553,9 @@ async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Res
         }
         payload["acp"] = _acp_sources()
         payload["env_overrides"] = _env_overrides()
-        _config_debug(
-            "PUT /config OK",
-            [f"path={str(path)!r}", f"exists={path.is_file()}", f"read_error={error!r}"],
-        )
         return web.json_response(payload)
     except Exception as exc:  # noqa: BLE001 — surface swallowed errors
         tb = traceback.format_exc()
-        _config_debug("PUT /config EXCEPTION", [f"{type(exc).__name__}: {exc}", tb])
         return web.json_response(
             {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
         )
@@ -717,56 +646,347 @@ async def _handle_status(request: web.Request, ctx: AppContext) -> web.Response:
     return web.json_response(payload)
 
 
-def _parse_panels_toon(text: str) -> list[dict[str, Any]]:
-    """Light structural parse of panels.toon (indentation-based TOON).
+# --------------------------------------------------------------------------
+# panels.toon round-trip (TOON — indentation-based, 2-space steps)
+# --------------------------------------------------------------------------
+#
+# The panels file Rutherford speaks is TOON: a top-level ``panels:`` mapping
+# whose keys are panel names, each carrying ``description`` / ``strategy`` and a
+# ``targets[N]:`` list of seat mappings. The READ layer once extracted only a
+# name + description + strategy + seat COUNT; writing back safely needs a full
+# structural model that preserves EVERY seat and EVERY seat key (cli / model /
+# role / label / weight / parity / stance, and any key we do not surface), so a
+# Save never silently drops config. The parser below yields, per panel:
+#
+#     {"name", "description", "strategy",
+#      "targets": [ {ordered seat mapping}, ... ],
+#      "extra":   {panel-level keys other than description/strategy/targets}}
+#
+# and the serializer round-trips it back to byte-identical TOON for the shapes
+# the user's real files use. ``_panels_roundtrip_ok`` proves parse→serialize→
+# parse equality before any write touches disk.
 
-    Extracts each named panel plus its description, strategy, and declared
-    target count. Read-only and best-effort.
+_TOON_INDENT = "  "  # 2 spaces per level
+
+
+def _toon_indent_of(s: str) -> int:
+    return len(s) - len(s.lstrip(" "))
+
+
+def _toon_scalar_needs_quote(value: str) -> bool:
+    """True when a bare TOON scalar would misparse and must be quoted.
+
+    We quote only when necessary so unquoted values (the common case — models
+    like ``gpt-5.6-sol``, strategies, descriptions with ``/ - . ,``) round-trip
+    byte-for-byte. Characters that break the bare grammar: the structural ``[``
+    / ``]`` (would look like a ``targets[N]`` count), ``:`` (key/value split),
+    ``"`` / ``#``, plus leading/trailing whitespace or an empty string.
+    """
+    if value == "":
+        return True
+    if value != value.strip():
+        return True
+    return any(ch in value for ch in ('[', ']', ':', '"', '#'))
+
+
+def _toon_emit_scalar(value: Any) -> str:
+    """Emit a scalar as TOON text (quoting only when required)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    s = str(value)
+    if _toon_scalar_needs_quote(s):
+        esc = s.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{esc}"'
+    return s
+
+
+def _toon_parse_scalar(raw: str) -> Any:
+    """Parse a TOON scalar value token back to a Python value.
+
+    Handles a double-quoted string (with \\-escapes), the bools true/false, and
+    plain ints; everything else stays a bare string. This mirrors what the
+    emitter produces so the pair round-trips.
+    """
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
+        body = raw[1:-1]
+        out: list[str] = []
+        i = 0
+        while i < len(body):
+            ch = body[i]
+            if ch == "\\" and i + 1 < len(body):
+                nxt = body[i + 1]
+                out.append({"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}.get(nxt, nxt))
+                i += 2
+                continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    # A bare integer (weights may be written bare). Keep floats/other as string.
+    if raw.lstrip("-").isdigit():
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
+    return raw
+
+
+# Panel-level keys the structured model names explicitly; anything else a panel
+# carries is preserved under ``extra`` and re-emitted so nothing is dropped.
+_PANEL_KNOWN_KEYS = ("description", "strategy", "targets")
+
+
+def _parse_panels_toon(text: str) -> list[dict[str, Any]]:
+    """Full structural parse of panels.toon into an ordered list of panels.
+
+    Each panel: {name, description, strategy, targets:[seat maps], extra:{}}.
+    Seats preserve key order and all keys. Raises ValueError on a shape the
+    round-trip cannot faithfully reproduce (so a write never proceeds blind).
     """
     panels: list[dict[str, Any]] = []
     lines = text.splitlines()
     in_panels = False
     current: dict[str, Any] | None = None
-
-    def _indent(s: str) -> int:
-        return len(s) - len(s.lstrip(" "))
+    current_seat: dict[str, Any] | None = None
+    in_targets = False
 
     for raw in lines:
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
+        indent = _toon_indent_of(raw)
         stripped = raw.strip()
-        indent = _indent(raw)
+
         if not in_panels:
-            if stripped.rstrip() == "panels:":
+            if stripped == "panels:":
                 in_panels = True
             continue
-        # Panel name lives at indent 2 and ends with ':'
-        if indent == 2 and stripped.endswith(":"):
-            if current:
+
+        # Panel name: indent 2, ends with ':' and has no value after the colon.
+        if indent == 2 and stripped.endswith(":") and ":" == stripped[-1]:
+            if current is not None:
                 panels.append(current)
-            current = {"name": stripped[:-1].strip(), "description": "", "strategy": "", "targets": None}
+            name = stripped[:-1].strip()
+            current = {"name": name, "description": "", "strategy": "", "targets": [], "extra": {}}
+            current_seat = None
+            in_targets = False
             continue
+
         if current is None:
             continue
-        if stripped.startswith("description:"):
-            current["description"] = stripped.split(":", 1)[1].strip()
-        elif stripped.startswith("strategy:"):
-            current["strategy"] = stripped.split(":", 1)[1].strip()
-        elif stripped.startswith("targets"):
-            # e.g. "targets[2]:"
-            lb, rb = stripped.find("["), stripped.find("]")
-            if lb != -1 and rb != -1 and rb > lb:
-                try:
-                    current["targets"] = int(stripped[lb + 1 : rb])
-                except ValueError:
-                    current["targets"] = None
-    if current:
+
+        # A seat starts with "- " (indent 6 in the reference files).
+        if stripped.startswith("- ") or stripped == "-":
+            if not in_targets:
+                raise ValueError(f"seat item outside a targets list in panel {current['name']!r}")
+            current_seat = {}
+            current["targets"].append(current_seat)
+            rest = stripped[2:] if stripped.startswith("- ") else ""
+            if rest.strip():
+                if ":" not in rest:
+                    raise ValueError(f"malformed seat line {stripped!r} in panel {current['name']!r}")
+                k, v = rest.split(":", 1)
+                current_seat[k.strip()] = _toon_parse_scalar(v)
+            continue
+
+        # A continuation key of the current seat (indent deeper than the "- ").
+        if current_seat is not None and in_targets and indent >= 8 and ":" in stripped and not stripped.endswith(":"):
+            k, v = stripped.split(":", 1)
+            current_seat[k.strip()] = _toon_parse_scalar(v)
+            continue
+
+        # Panel-level key at indent 4.
+        if indent == 4:
+            current_seat = None
+            if stripped.endswith(":") and stripped[:-1].strip().split("[", 1)[0] == "targets":
+                # "targets[N]:" — begin the seat list. N is advisory (we recount).
+                in_targets = True
+                current["targets"] = []
+                continue
+            in_targets = False
+            if ":" not in stripped:
+                raise ValueError(f"malformed panel line {stripped!r} in panel {current['name']!r}")
+            k, v = stripped.split(":", 1)
+            key = k.strip()
+            val = _toon_parse_scalar(v)
+            if key in ("description", "strategy"):
+                current[key] = val
+            else:
+                current["extra"][key] = val
+            continue
+
+        raise ValueError(f"unexpected line {raw!r} in panel {current['name']!r}")
+
+    if current is not None:
         panels.append(current)
     return panels
 
 
+# Seat key emission order: the reference files use cli, model, role, label; keep
+# that order for known keys, then append any unknown keys in first-seen order so
+# nothing is dropped and common seats round-trip byte-for-byte.
+_SEAT_KEY_ORDER = ("cli", "model", "role", "label", "weight", "parity", "stance")
+
+
+def _serialize_panels_toon(panels: list[dict[str, Any]]) -> str:
+    """Serialize the structured panel list back to TOON text.
+
+    Round-trips the shapes the real files use byte-for-byte. Seat keys are
+    emitted in the canonical order above, then any remaining keys in the order
+    they appear in the seat mapping (so unknown keys are preserved).
+    """
+    out: list[str] = ["panels:"]
+    for panel in panels:
+        name = str(panel.get("name", "")).strip()
+        if not name:
+            raise ValueError("a panel is missing a name")
+        out.append(f"{_TOON_INDENT}{name}:")
+        # description / strategy first (matching the reference files), then any
+        # extra panel-level keys, then the targets list last.
+        desc = panel.get("description", "")
+        if desc != "" and desc is not None:
+            out.append(f"{_TOON_INDENT * 2}description: {_toon_emit_scalar(desc)}")
+        strat = panel.get("strategy", "")
+        if strat != "" and strat is not None:
+            out.append(f"{_TOON_INDENT * 2}strategy: {_toon_emit_scalar(strat)}")
+        extra = panel.get("extra") or {}
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                out.append(f"{_TOON_INDENT * 2}{k}: {_toon_emit_scalar(v)}")
+        seats = panel.get("targets") or []
+        if not isinstance(seats, list):
+            raise ValueError(f"panel {name!r} targets must be a list")
+        out.append(f"{_TOON_INDENT * 2}targets[{len(seats)}]:")
+        for seat in seats:
+            if not isinstance(seat, dict):
+                raise ValueError(f"panel {name!r} has a non-mapping seat")
+            ordered = [k for k in _SEAT_KEY_ORDER if k in seat]
+            ordered += [k for k in seat if k not in _SEAT_KEY_ORDER]
+            if not ordered:
+                raise ValueError(f"panel {name!r} has an empty seat")
+            first = ordered[0]
+            out.append(f"{_TOON_INDENT * 3}- {first}: {_toon_emit_scalar(seat[first])}")
+            for k in ordered[1:]:
+                out.append(f"{_TOON_INDENT * 4}{k}: {_toon_emit_scalar(seat[k])}")
+    return "\n".join(out) + "\n"
+
+
+def _panels_roundtrip_ok(text: str) -> bool:
+    """parse → serialize → parse structural equality guard."""
+    first = _parse_panels_toon(text)
+    second = _parse_panels_toon(_serialize_panels_toon(first))
+    return first == second
+
+
+def _validate_panels_body(body: Any) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Validate an incoming panels write body into the structured model.
+
+    Accepts either a bare list of panels or ``{"panels": [...]}``. Each panel
+    needs a non-empty name and a non-empty targets list; each seat needs a
+    non-empty ``cli``. Unknown seat keys are preserved. Returns (panels, error).
+    """
+    if isinstance(body, dict) and "panels" in body:
+        body = body["panels"]
+    if not isinstance(body, list):
+        return None, "body must be a list of panels (or {\"panels\": [...] })"
+    names: set[str] = set()
+    clean: list[dict[str, Any]] = []
+    for i, p in enumerate(body):
+        if not isinstance(p, dict):
+            return None, f"panel [{i}] must be an object"
+        name = str(p.get("name", "")).strip()
+        if not name:
+            return None, f"panel [{i}] is missing a non-empty name"
+        if name in names:
+            return None, f"duplicate panel name {name!r}"
+        names.add(name)
+        seats_in = p.get("targets")
+        if not isinstance(seats_in, list) or not seats_in:
+            return None, f"panel {name!r} needs a non-empty targets list"
+        seats: list[dict[str, Any]] = []
+        for j, s in enumerate(seats_in):
+            if not isinstance(s, dict):
+                return None, f"panel {name!r} seat [{j}] must be an object"
+            cli = str(s.get("cli", "")).strip()
+            if not cli:
+                return None, f"panel {name!r} seat [{j}] is missing a non-empty cli"
+            seat: dict[str, Any] = {}
+            for k, v in s.items():
+                if v is None:
+                    continue
+                if isinstance(v, (dict, list)):
+                    return None, f"panel {name!r} seat [{j}] key {k!r} must be a scalar"
+                sv = str(v).strip() if isinstance(v, str) else v
+                if isinstance(sv, str) and sv == "":
+                    continue
+                seat[k] = sv
+            seats.append(seat)
+        extra = p.get("extra") if isinstance(p.get("extra"), dict) else {}
+        clean.append(
+            {
+                "name": name,
+                "description": str(p.get("description", "") or ""),
+                "strategy": str(p.get("strategy", "") or ""),
+                "targets": seats,
+                "extra": {str(k): v for k, v in extra.items()},
+            }
+        )
+    return clean, None
+
+
+def _atomic_write_panels(path: Path, panels: list[dict[str, Any]]) -> None:
+    """Serialize + validate round-trip + atomically write panels.toon, backing
+    up first. Raises ValueError if the serialized text does not round-trip."""
+    text = _serialize_panels_toon(panels)
+    if not _panels_roundtrip_ok(text):
+        raise ValueError("serialized panels.toon failed the parse→serialize→parse round-trip")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if path.is_file():
+        stamp = date.today().isoformat()
+        bak = path.with_name(f"{path.name}.bak-{stamp}")
+        n = 1
+        while bak.exists():
+            bak = path.with_name(f"{path.name}.bak-{stamp}.{n}")
+            n += 1
+        bak.write_bytes(path.read_bytes())
+
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _panels_path_for_scope(scope: str) -> Path:
+    """Resolve the panels.toon path for a scope. global → ~/.rutherford,
+    workspace → <cwd>/.rutherford."""
+    if scope == "global":
+        return _home() / ".rutherford" / "panels.toon"
+    return _project_root() / ".rutherford" / "panels.toon"
+
+
 async def _handle_panels(request: web.Request, ctx: AppContext) -> web.Response:
-    """GET /panels — named panels from panels.toon across global + project scopes."""
+    """GET /panels — named panels from panels.toon across global + project scopes.
+
+    Returns each panel with its full seat list so the editor can round-trip it,
+    plus a ``targets`` count for the compact display the read view already used.
+    A parse error is surfaced per-source, never raised.
+    """
     result: list[dict[str, Any]] = []
     for d in _rutherford_dirs():
         scope = "global" if d == _home() / ".rutherford" else "workspace"
@@ -775,11 +995,100 @@ async def _handle_panels(request: web.Request, ctx: AppContext) -> web.Response:
         entry: dict[str, Any] = {**meta, "panels": []}
         if path.is_file():
             try:
-                entry["panels"] = _parse_panels_toon(path.read_text(encoding="utf-8"))
-            except OSError as exc:
+                parsed = _parse_panels_toon(path.read_text(encoding="utf-8"))
+                entry["panels"] = [
+                    {
+                        "name": p["name"],
+                        "description": p.get("description", ""),
+                        "strategy": p.get("strategy", ""),
+                        "targets": len(p.get("targets") or []),
+                        "seats": p.get("targets") or [],
+                        "extra": p.get("extra") or {},
+                    }
+                    for p in parsed
+                ]
+            except (OSError, ValueError) as exc:
                 entry["error"] = f"{type(exc).__name__}: {exc}"
         result.append(entry)
     return web.json_response({"platform": _platform_label(), "sources": result})
+
+
+async def _handle_panels_write(request: web.Request, ctx: AppContext) -> web.Response:
+    """PUT /rutherford-panels?scope=global|workspace — write panels.toon.
+
+    NON-reserved base (/api/apps/rutherford reserves /config, so panels reads
+    live at /panels and writes at /rutherford-panels). Accepts a JSON body that
+    is a list of panels or {"panels": [...]}, serializes it to valid TOON, and
+    writes it to the resolved scope path with the same safety envelope as the
+    config writer: round-trip validation before touching disk, a timestamped
+    .bak, an atomic temp-file + os.replace, and only ever the resolved
+    panels.toon path (never a request-supplied path).
+    """
+    scope = (request.query.get("scope") or "global").lower()
+    if scope not in ("global", "workspace"):
+        return web.json_response(
+            {"error": f"invalid scope {scope!r}; expected global|workspace"}, status=400
+        )
+    try:
+        try:
+            body = await request.json()
+        except (ValueError, TypeError) as exc:
+            return web.json_response({"error": f"invalid JSON body: {exc}"}, status=400)
+
+        clean, verr = _validate_panels_body(body)
+        if verr is not None:
+            return web.json_response({"error": verr}, status=400)
+        assert clean is not None
+
+        path = _panels_path_for_scope(scope)
+        resolved = path.resolve()
+        if resolved.name != "panels.toon":
+            return web.json_response(
+                {"error": "refusing to write a non panels.toon target"}, status=400
+            )
+        # Defense in depth: the parent must be a .rutherford dir under home/cwd.
+        expected_parents = {
+            (_home() / ".rutherford").resolve(),
+            (_project_root() / ".rutherford").resolve(),
+        }
+        if resolved.parent not in expected_parents:
+            return web.json_response(
+                {"error": "refusing to write outside a resolved .rutherford directory"},
+                status=400,
+            )
+
+        try:
+            _atomic_write_panels(path, clean)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except OSError as exc:
+            return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=500)
+
+        # Re-read and return the fresh payload (mirrors the GET shape) so the UI
+        # can confirm persistence via written===true or a verify GET.
+        meta = _meta(path, scope)
+        payload: dict[str, Any] = {**meta, "written": True, "panels": []}
+        try:
+            parsed = _parse_panels_toon(path.read_text(encoding="utf-8"))
+            payload["panels"] = [
+                {
+                    "name": p["name"],
+                    "description": p.get("description", ""),
+                    "strategy": p.get("strategy", ""),
+                    "targets": len(p.get("targets") or []),
+                    "seats": p.get("targets") or [],
+                    "extra": p.get("extra") or {},
+                }
+                for p in parsed
+            ]
+        except (OSError, ValueError) as exc:
+            payload["error"] = f"{type(exc).__name__}: {exc}"
+        return web.json_response(payload)
+    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
+        tb = traceback.format_exc()
+        return web.json_response(
+            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
+        )
 
 
 async def _handle_roles(request: web.Request, ctx: AppContext) -> web.Response:
@@ -828,12 +1137,14 @@ async def _handle_roles(request: web.Request, ctx: AppContext) -> web.Response:
 
 def register_routes(ctx: AppContext) -> list[AppRoute]:
     """Return the app's routes. Base prefix /api/apps/rutherford is applied by
-    the gateway's RouteRegistry. GET routes are read-only; PUT /config writes
+    the gateway's RouteRegistry. GET routes are read-only; PUT
+    /rutherford-config writes
     config.toml (Phase 2)."""
     return [
         AppRoute("GET", "/status", _handle_status),
-        AppRoute("GET", "/config", _handle_config),
-        AppRoute("PUT", "/config", _handle_config_write),
+        AppRoute("GET", "/rutherford-config", _handle_config),
+        AppRoute("PUT", "/rutherford-config", _handle_config_write),
         AppRoute("GET", "/panels", _handle_panels),
+        AppRoute("PUT", "/rutherford-panels", _handle_panels_write),
         AppRoute("GET", "/roles", _handle_roles),
     ]

@@ -310,7 +310,7 @@ the contracts P2/P3 writes will round-trip against.
 > using the OS path separator (`os.pathsep`, §2.3 HR-2) before being returned as
 > arrays.
 
-### `GET /api/apps/rutherford/config?scope=global|workspace`
+### `GET /api/apps/rutherford/rutherford-config?scope=global|workspace`
 Reads one config layer. `scope=workspace` also accepts `?cwd=<abs path>` (else the
 active project dir). The `path` is resolved per-platform at runtime (§2.3) and
 returned verbatim so the UI renders the real native location. Response:
@@ -415,7 +415,7 @@ Read-only role catalog (P1). Response:
 }
 ```
 
-**Phasing hook:** P2 adds `PUT /config` (+ per-field validation); P3 adds
+**Phasing hook:** P2 adds `PUT /rutherford-config` (+ per-field validation); P3 adds
 `PUT /panels`, `PUT /roles`, and `POST /agents/{id}:enable|disable` — all on these
 same route roots, so nothing here is renamed.
 
@@ -564,7 +564,7 @@ O1). Layout is a left rail of sections + a main panel:
   chip (ok / not-installed / handshake-failed / unknown), with a "Check reachability"
   action (§5, O2). Native table + badge/chip + button components.
 - **Config viewer** — a scope toggle (**Global | Workspace**) driving
-  `GET /config?scope=…`. Each scope view MUST **display the resolved native
+  `GET /rutherford-config?scope=…`. Each scope view MUST **display the resolved native
   `path`** returned by the backend (the real `%APPDATA%\…` on Windows,
   `~/.config/…` on Linux/macOS) with a clear label of **which scope/file** the values
   came from and the **precedence chain** (global `acp.json` → global `config.toml` →
@@ -601,19 +601,21 @@ No custom design system.
 **P1 ships:**
 - `ui/` Vite bundle (path (a)) with the four read-only sections above.
 - `backend.routes` external-app module returning `list[AppRoute]` with **GET-only**
-  `/config`, `/status`, `/panels`, `/roles`.
+  `/rutherford-config`, `/status`, `/panels`, `/roles`.
 - Manifest: `ui.entry` + `ui.pages[]`, `backend.routes`, `permissions.api`
   (`/api/apps/rutherford*`), and `permissions.mcpTools` iff the status backend
   invokes Rutherford MCP tools (O3).
 
 **How writes drop in (no rewrite):**
-- **P2 (write config):** add `PUT /config?scope=…` accepting the same `parsed` shape,
+- **P2 (write config):** add `PUT /rutherford-config?scope=…` accepting the same `parsed` shape,
   validating fields, writing `config.toml`; add a "reconnect server" prompt (config
   edits need a reconnect per §4). The read model in §3 is already the write model.
-- **P3 (write panels + roles + enable/disable):** add `PUT /panels` (then call
+- **P3 (write panels + roles + enable/disable):** add `PUT /rutherford-panels` (then call
   `reload_panels` — hot reload), `PUT /roles` (warn: server restart needed),
   `POST /agents/{id}:enable|disable` (writes `enabled_agents` /
-  `[agents.<id>].enabled`). All on existing route roots; the UI sections flip from
+  `[agents.<id>].enabled`). Write routes use NON-reserved paths (Kiro Crew reserves
+  `/api/apps/<app>/config`, so panels writes live at `/rutherford-panels`, not a bare
+  `/panels`). All on existing route roots; the UI sections flip from
   read-only to editable in place. `permissions.mcpTools` gains `reload_panels`.
 
 Because every P1 route root is the noun a later write targets, and the read JSON is
