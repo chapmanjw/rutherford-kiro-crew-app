@@ -1,6 +1,6 @@
 import { jsxs as a, Fragment as I, jsx as e } from "react/jsx-runtime";
 import { useAppApi as be } from "@kirocrew/app-sdk";
-import { PageHeader as ye, StatCard as J, Card as q, CardTitle as O } from "@kirocrew/app-sdk/ui";
+import { PageHeader as ye, StatCard as J, Card as q, CardTitle as P } from "@kirocrew/app-sdk/ui";
 import { useState as k, useRef as ve, useCallback as H, useEffect as Q } from "react";
 import _e from "lucide-react";
 const {
@@ -19,12 +19,12 @@ const {
   Info: pe,
   Pencil: ce,
   FileText: Ce
-} = _e, j = "/api/apps/rutherford", ze = [
+} = _e, j = "/api/apps/rutherford", Re = [
   { id: "status", label: "Overview", icon: Ne },
   { id: "config", label: "Config", icon: we },
   { id: "panels", label: "Panels", icon: ke },
   { id: "roles", label: "Roles", icon: Se }
-], Re = ["read_only", "propose", "write", "yolo"], $e = ["ephemeral", "job"], Ee = [
+], ze = ["read_only", "propose", "write", "yolo"], $e = ["ephemeral", "job"], Ee = [
   "all-voices",
   "unanimous",
   "majority",
@@ -51,7 +51,7 @@ function V({ meta: t }) {
   ] });
 }
 function Ze() {
-  const t = be(), [r, c] = k("status"), [u, d] = k(!0), [n, l] = k(null), [m, f] = k(null), [g, _] = k(null), [i, v] = k("global"), [S, D] = k(null), [B, b] = k(null), [W, h] = k(null), o = ve("global"), $ = H(
+  const t = be(), [r, d] = k("status"), [u, c] = k(!0), [n, l] = k(null), [m, f] = k(null), [g, _] = k(null), [i, v] = k("global"), [S, D] = k(null), [B, b] = k(null), [W, h] = k(null), o = ve("global"), $ = H(
     async (x) => {
       o.current = x;
       try {
@@ -69,7 +69,7 @@ function Ze() {
     },
     [t]
   ), y = H(async () => {
-    d(!0), l(null);
+    c(!0), l(null);
     try {
       const [x, s, p, E] = await Promise.all([
         // Meta is best-effort: catch so a meta failure degrades dropdowns to
@@ -85,7 +85,7 @@ function Ze() {
     } catch (x) {
       l(x instanceof Error ? x.message : String(x));
     } finally {
-      d(!1);
+      c(!1);
     }
   }, [t]);
   Q(() => {
@@ -99,44 +99,44 @@ function Ze() {
     async (x, s) => {
       const p = `${j}/rutherford-config?scope=${x}`;
       let E = await t.put(p, s);
-      C(E) || (await new Promise((z) => setTimeout(z, 600)), E = await t.put(p, s));
-      let P = C(E) ? E : null;
-      if (!P) {
-        const z = await t.get(p);
-        if (z && typeof z == "object") {
-          const A = z;
-          qe(s, A.config) && (P = A);
+      C(E) || (await new Promise((R) => setTimeout(R, 600)), E = await t.put(p, s));
+      let L = C(E) ? E : null;
+      if (!L) {
+        const R = await t.get(p);
+        if (R && typeof R == "object") {
+          const A = R;
+          qe(s, A.config) && (L = A);
         }
       }
-      if (!P)
+      if (!L)
         throw new Error(
           "Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your entered values were kept; try Save again."
         );
-      const L = P.scope ?? o.current;
-      o.current = L, D({ ...P, scope: L });
+      const O = L.scope ?? o.current;
+      o.current = O, D({ ...L, scope: O });
       try {
-        const z = await t.get(`${j}/status`);
-        z && typeof z == "object" && _(z);
+        const R = await t.get(`${j}/status`);
+        R && typeof R == "object" && _(R);
       } catch {
       }
-      return P;
+      return L;
     },
     [t]
   ), F = H(
     async (x, s) => {
       var A;
-      const p = `${j}/rutherford-panels?scope=${x}`, E = { panels: s }, P = (w) => !!w && typeof w == "object" && w.written === !0;
-      let L = await t.put(p, E);
-      P(L) || (await new Promise((w) => setTimeout(w, 600)), L = await t.put(p, E));
-      let z = P(L) ? L : null;
-      if (!z) {
+      const p = `${j}/rutherford-panels?scope=${x}`, E = { panels: s }, L = (w) => !!w && typeof w == "object" && w.written === !0;
+      let O = await t.put(p, E);
+      L(O) || (await new Promise((w) => setTimeout(w, 600)), O = await t.put(p, E));
+      let R = L(O) ? O : null;
+      if (!R) {
         const w = await t.get(`${j}/panels`), G = (A = w == null ? void 0 : w.sources) == null ? void 0 : A.find((T) => T.scope === x);
         if (G) {
           const T = s.map((Y) => Y.name).sort(), U = (Array.isArray(G.panels) ? G.panels : []).map((Y) => Y.name).sort();
-          T.length === U.length && T.every((Y, ge) => Y === U[ge]) && (z = { ...G, written: !0 });
+          T.length === U.length && T.every((Y, ge) => Y === U[ge]) && (R = { ...G, written: !0 });
         }
       }
-      if (!z)
+      if (!R)
         throw new Error(
           "Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your edits were kept; try Save again."
         );
@@ -145,7 +145,7 @@ function Ze() {
         w && typeof w == "object" && b(w);
       } catch {
       }
-      return z;
+      return R;
     },
     [t]
   ), ae = H(
@@ -162,12 +162,12 @@ function Ze() {
     [t]
   ), re = H(
     async (x, s) => {
-      const p = `${j}/rutherford-roles?scope=${x}`, E = (A) => !!A && typeof A == "object" && A.written === !0, P = s.op === "delete";
-      let L = await t.put(p, s);
-      E(L) || (await new Promise((A) => setTimeout(A, 600)), L = await t.put(p, s));
-      let z = E(L) ? L : null;
-      if (!z)
-        if (P) {
+      const p = `${j}/rutherford-roles?scope=${x}`, E = (A) => !!A && typeof A == "object" && A.written === !0, L = s.op === "delete";
+      let O = await t.put(p, s);
+      E(O) || (await new Promise((A) => setTimeout(A, 600)), O = await t.put(p, s));
+      let R = E(O) ? O : null;
+      if (!R)
+        if (L) {
           let A = !1;
           try {
             const w = await t.get(
@@ -182,25 +182,25 @@ function Ze() {
               T && !T.error && Array.isArray(T.roles) && (T.roles.some((Y) => Y.name === s.name) || (A = !0));
             } catch {
             }
-          A && (z = { scope: x, path: "", platform: "", written: !0, deleted: !0 });
+          A && (R = { scope: x, path: "", platform: "", written: !0, deleted: !0 });
         } else {
           const A = await t.get(`${j}/rutherford-roles`), w = (Array.isArray(A == null ? void 0 : A.sources) ? A.sources : []).find(
             (T) => T.scope === x
           );
           (Array.isArray(w == null ? void 0 : w.roles) ? w.roles : []).some(
             (T) => T.name === s.name
-          ) && (z = { scope: x, path: (w == null ? void 0 : w.path) ?? "", platform: "", written: !0 });
+          ) && (R = { scope: x, path: (w == null ? void 0 : w.path) ?? "", platform: "", written: !0 });
         }
-      if (!z)
+      if (!R)
         throw new Error(
-          P ? "Delete could not be confirmed — the role file may still exist (a non-404 error, empty response, or unreachable server). Nothing was closed; your draft was kept. Try Delete again." : "Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your edits were kept; try Save again."
+          L ? "Delete could not be confirmed — the role file may still exist (a non-404 error, empty response, or unreachable server). Nothing was closed; your draft was kept. Try Delete again." : "Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your edits were kept; try Save again."
         );
       try {
         const A = await t.get(`${j}/rutherford-roles`);
         A && typeof A == "object" && h(A);
       } catch {
       }
-      return z;
+      return R;
     },
     [t]
   );
@@ -208,10 +208,10 @@ function Ze() {
     /* @__PURE__ */ e(ye, { title: "Rutherford", subtitle: "Config, panels & roles — config.toml / panels.toon / role files" }),
     /* @__PURE__ */ a("div", { className: "px-6 pb-8 overflow-y-auto flex-1 min-h-0", children: [
       /* @__PURE__ */ a("div", { className: "flex gap-1 mb-5 border-b border-[var(--border,#2a2a2a)]", children: [
-        ze.map(({ id: x, label: s, icon: p }) => /* @__PURE__ */ a(
+        Re.map(({ id: x, label: s, icon: p }) => /* @__PURE__ */ a(
           "button",
           {
-            onClick: () => c(x),
+            onClick: () => d(x),
             className: "flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors " + (r === x ? "border-[var(--accent,#6366f1)] text-[var(--fg,#eee)]" : "border-transparent text-muted hover:text-[var(--fg,#eee)]"),
             children: [
               /* @__PURE__ */ e(p, { size: 15 }),
@@ -238,7 +238,7 @@ function Ze() {
       u && !g ? /* @__PURE__ */ e("p", { className: "text-sm text-muted", children: "Loading…" }) : /* @__PURE__ */ a(I, { children: [
         r === "status" && /* @__PURE__ */ e(je, { status: g }),
         r === "config" && /* @__PURE__ */ e(
-          Pe,
+          Le,
           {
             config: S,
             meta: m,
@@ -256,7 +256,7 @@ function Ze() {
 function je({ status: t }) {
   var f, g, _;
   if (!t) return /* @__PURE__ */ e("p", { className: "text-sm text-muted", children: "No status." });
-  const r = t.agents || { enabled: [], enabled_source: "", allowlist_configured: !1, roster: [] }, c = Array.isArray(r.enabled) ? r.enabled : [], u = Array.isArray(r.roster) ? r.roster : [], d = Array.isArray(t.acp) ? t.acp : [], n = t.defaults || {}, l = r.allowlist_configured ? String(c.length) : "All", m = Object.keys(t.env_overrides || {}).filter((i) => i !== "_note");
+  const r = t.agents || { enabled: [], enabled_source: "", allowlist_configured: !1, roster: [] }, d = Array.isArray(r.enabled) ? r.enabled : [], u = Array.isArray(r.roster) ? r.roster : [], c = Array.isArray(t.acp) ? t.acp : [], n = t.defaults || {}, l = r.allowlist_configured ? String(d.length) : "All", m = Object.keys(t.env_overrides || {}).filter((i) => i !== "_note");
   return /* @__PURE__ */ a(I, { children: [
     /* @__PURE__ */ a("div", { className: "grid gap-3.5 grid-cols-[repeat(auto-fit,minmax(150px,1fr))] mb-6", children: [
       /* @__PURE__ */ e(J, { label: "Platform", value: t.platform }),
@@ -271,12 +271,12 @@ function je({ status: t }) {
       )
     ] }),
     /* @__PURE__ */ a(q, { children: [
-      /* @__PURE__ */ e(O, { children: "Resolved roster" }),
+      /* @__PURE__ */ e(P, { children: "Resolved roster" }),
       u.length > 0 ? /* @__PURE__ */ e("div", { className: "mt-2 flex flex-col gap-1.5", children: u.map((i) => /* @__PURE__ */ a("div", { className: "flex items-center gap-2 text-sm", children: [
         /* @__PURE__ */ e("span", { className: "px-2 py-0.5 rounded text-xs bg-[var(--surface-2,#2a2a2a)] text-[var(--fg,#eee)]", children: i.id }),
         /* @__PURE__ */ e("span", { className: "text-muted text-xs", children: i.default_model ?? "(agent default)" }),
         /* @__PURE__ */ e("span", { className: "text-[10px] text-muted opacity-60 ml-auto", children: i.source })
-      ] }, i.id)) }) : r.allowlist_configured ? /* @__PURE__ */ e("div", { className: "flex flex-wrap gap-2 mt-2", children: c.map((i) => /* @__PURE__ */ e(
+      ] }, i.id)) }) : r.allowlist_configured ? /* @__PURE__ */ e("div", { className: "flex flex-wrap gap-2 mt-2", children: d.map((i) => /* @__PURE__ */ e(
         "span",
         {
           className: "px-2 py-0.5 rounded text-xs bg-[var(--surface-2,#2a2a2a)] text-[var(--fg,#eee)]",
@@ -293,17 +293,17 @@ function je({ status: t }) {
     ] }),
     /* @__PURE__ */ e("div", { className: "h-3" }),
     /* @__PURE__ */ a(q, { children: [
-      /* @__PURE__ */ e(O, { children: "Config locations" }),
+      /* @__PURE__ */ e(P, { children: "Config locations" }),
       ((f = t.config_locations) == null ? void 0 : f.global) && /* @__PURE__ */ e(V, { meta: t.config_locations.global }),
       ((g = t.config_locations) == null ? void 0 : g.workspace) && /* @__PURE__ */ e(V, { meta: t.config_locations.workspace })
     ] }),
     /* @__PURE__ */ e("div", { className: "h-3" }),
     /* @__PURE__ */ a(q, { children: [
-      /* @__PURE__ */ e(O, { children: /* @__PURE__ */ a("span", { className: "inline-flex items-center gap-1.5", children: [
+      /* @__PURE__ */ e(P, { children: /* @__PURE__ */ a("span", { className: "inline-flex items-center gap-1.5", children: [
         /* @__PURE__ */ e(Ae, { size: 14 }),
         " acp.json (agent servers)"
       ] }) }),
-      d.map((i) => {
+      c.map((i) => {
         const v = Object.keys(i.agent_servers || {});
         return /* @__PURE__ */ a("div", { className: "mt-2", children: [
           /* @__PURE__ */ e(V, { meta: i }),
@@ -321,7 +321,7 @@ function je({ status: t }) {
     m.length > 0 && /* @__PURE__ */ a(I, { children: [
       /* @__PURE__ */ e("div", { className: "h-3" }),
       /* @__PURE__ */ a(q, { children: [
-        /* @__PURE__ */ e(O, { children: "Environment overrides" }),
+        /* @__PURE__ */ e(P, { children: "Environment overrides" }),
         /* @__PURE__ */ e("div", { className: "mt-2 flex flex-col gap-1", children: m.map((i) => /* @__PURE__ */ a("div", { className: "text-xs", children: [
           /* @__PURE__ */ e("code", { children: i }),
           " = ",
@@ -332,7 +332,7 @@ function je({ status: t }) {
     ] }),
     /* @__PURE__ */ e("div", { className: "h-3" }),
     /* @__PURE__ */ a(q, { children: [
-      /* @__PURE__ */ e(O, { children: "Reachability" }),
+      /* @__PURE__ */ e(P, { children: "Reachability" }),
       /* @__PURE__ */ e("p", { className: "text-sm text-muted mt-1", children: ((_ = t.reachability) == null ? void 0 : _.note) ?? "—" })
     ] })
   ] });
@@ -355,32 +355,32 @@ function he({ required: t }) {
 function M({
   label: t,
   hint: r,
-  help: c,
+  help: d,
   required: u,
-  absent: d,
+  absent: c,
   children: n
 }) {
   return /* @__PURE__ */ a("label", { className: "flex flex-col gap-1", children: [
     /* @__PURE__ */ a("span", { className: "text-sm text-[var(--fg,#eee)] flex items-center flex-wrap", children: [
       t,
       r && /* @__PURE__ */ e("code", { className: "ml-1.5 text-[10px] text-muted opacity-70", children: r }),
-      c && /* @__PURE__ */ e(te, { text: c }),
+      d && /* @__PURE__ */ e(te, { text: d }),
       u !== void 0 && /* @__PURE__ */ e(he, { required: u })
     ] }),
-    d && /* @__PURE__ */ a("span", { className: "text-[11px] text-muted -mt-0.5", children: [
+    c && /* @__PURE__ */ a("span", { className: "text-[11px] text-muted -mt-0.5", children: [
       "absent → ",
-      d
+      c
     ] }),
     n
   ] });
 }
-const R = "px-2 py-1.5 text-sm rounded bg-[var(--surface-2,#1e1e1e)] border border-[var(--border,#2a2a2a)] text-[var(--fg,#eee)] outline-none focus:border-[var(--accent,#6366f1)]";
+const z = "px-2 py-1.5 text-sm rounded bg-[var(--surface-2,#1e1e1e)] border border-[var(--border,#2a2a2a)] text-[var(--fg,#eee)] outline-none focus:border-[var(--accent,#6366f1)]";
 function le({
   label: t,
   hint: r,
-  help: c,
+  help: d,
   required: u,
-  absent: d,
+  absent: c,
   values: n,
   onChange: l
 }) {
@@ -389,19 +389,19 @@ function le({
     /* @__PURE__ */ a("span", { className: "text-sm text-[var(--fg,#eee)] flex items-center flex-wrap", children: [
       t,
       r && /* @__PURE__ */ e("code", { className: "ml-1.5 text-[10px] text-muted opacity-70", children: r }),
-      c && /* @__PURE__ */ e(te, { text: c }),
+      d && /* @__PURE__ */ e(te, { text: d }),
       u !== void 0 && /* @__PURE__ */ e(he, { required: u })
     ] }),
-    d && /* @__PURE__ */ a("span", { className: "text-[11px] text-muted -mt-0.5", children: [
+    c && /* @__PURE__ */ a("span", { className: "text-[11px] text-muted -mt-0.5", children: [
       "empty → ",
-      d
+      c
     ] }),
     /* @__PURE__ */ a("div", { className: "flex flex-col gap-1.5", children: [
       n.map((g, _) => /* @__PURE__ */ a("div", { className: "flex items-center gap-1.5", children: [
         /* @__PURE__ */ e(
           "input",
           {
-            className: R + " flex-1",
+            className: z + " flex-1",
             value: g,
             onChange: (i) => {
               const v = n.slice();
@@ -423,7 +423,7 @@ function le({
         /* @__PURE__ */ e(
           "input",
           {
-            className: R + " flex-1",
+            className: z + " flex-1",
             placeholder: `Add ${t}…`,
             value: m,
             onChange: (g) => f(g.target.value),
@@ -450,56 +450,71 @@ function le({
 function oe({
   value: t,
   onChange: r,
-  srLabel: c
+  srLabel: d
 }) {
-  return /* @__PURE__ */ a(
+  const [u, c] = k(!1);
+  return /* @__PURE__ */ e(
     "button",
     {
       type: "button",
       role: "switch",
       "aria-checked": t,
-      "aria-label": c,
+      "aria-label": d,
       onClick: () => r(!t),
-      className: "relative inline-flex items-center shrink-0 h-6 w-12 rounded-full transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent,#6366f1)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--surface,#111)] border " + // ON uses a FIXED indigo fill (not the theme --accent var, which the
-      // dashboard can resolve to a pale/near-white value that makes the pill
-      // and its white "ON" text invisible). A solid border shows the track on
-      // any surface in BOTH states.
-      (t ? "bg-[#4f46e5] border-[#4f46e5]" : "bg-[var(--surface-3,#3a3a3a)] border-[var(--border,#4a4a4a)]"),
-      children: [
-        /* @__PURE__ */ e(
-          "span",
-          {
-            className: "absolute text-[9px] font-semibold leading-none tracking-wide select-none " + (t ? "left-1.5 text-white" : "right-1.5 text-[var(--fg,#eee)] opacity-70"),
-            "aria-hidden": "true",
-            children: t ? "ON" : "OFF"
+      onFocus: () => c(!0),
+      onBlur: () => c(!1),
+      style: {
+        position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        flex: "none",
+        width: 40,
+        height: 22,
+        borderRadius: 9999,
+        cursor: "pointer",
+        padding: 0,
+        boxSizing: "border-box",
+        transition: "background-color .15s, border-color .15s",
+        outline: "none",
+        backgroundColor: t ? "var(--accent, #7c3aed)" : "transparent",
+        border: t ? "1px solid var(--accent, #7c3aed)" : "1px solid var(--border, #6b7280)",
+        boxShadow: u ? "0 0 0 2px var(--accent, #7c3aed)" : "none"
+      },
+      children: /* @__PURE__ */ e(
+        "span",
+        {
+          "aria-hidden": "true",
+          style: {
+            position: "absolute",
+            top: 2,
+            left: t ? 22 : 2,
+            width: 16,
+            height: 16,
+            borderRadius: 9999,
+            backgroundColor: "#ffffff",
+            boxShadow: "0 1px 2px rgba(0,0,0,.35)",
+            transition: "left .15s"
           }
-        ),
-        /* @__PURE__ */ e(
-          "span",
-          {
-            className: "absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all duration-150 " + (t ? "left-[26px]" : "left-0.5"),
-            "aria-hidden": "true"
-          }
-        )
-      ]
+        }
+      )
     }
   );
 }
 function de({
   label: t,
   hint: r,
-  help: c,
+  help: d,
   absent: u,
-  value: d,
+  value: c,
   onChange: n
 }) {
   return /* @__PURE__ */ a("label", { className: "flex items-start gap-2.5 cursor-pointer", children: [
-    /* @__PURE__ */ e("span", { className: "mt-0.5", children: /* @__PURE__ */ e(oe, { value: d, onChange: n, srLabel: t || void 0 }) }),
+    /* @__PURE__ */ e("span", { className: "mt-0.5", children: /* @__PURE__ */ e(oe, { value: c, onChange: n, srLabel: t || void 0 }) }),
     /* @__PURE__ */ a("span", { className: "flex flex-col", children: [
       /* @__PURE__ */ a("span", { className: "text-sm text-[var(--fg,#eee)] flex items-center flex-wrap", children: [
         t,
         r && /* @__PURE__ */ e("code", { className: "ml-1.5 text-[10px] text-muted opacity-70", children: r }),
-        c && /* @__PURE__ */ e(te, { text: c })
+        d && /* @__PURE__ */ e(te, { text: d })
       ] }),
       u && /* @__PURE__ */ a("span", { className: "text-[11px] text-muted", children: [
         "absent → ",
@@ -576,20 +591,20 @@ const De = {
   }
 };
 function Te(t) {
-  const r = t.config || {}, c = (n) => {
+  const r = t.config || {}, d = (n) => {
     const l = r[n];
     return typeof l == "number" && Number.isFinite(l) ? String(l) : typeof l == "string" && l.trim() !== "" && Number.isFinite(Number(l)) ? String(Number(l)) : "";
-  }, u = t.derived || {}, d = (n) => Array.isArray(n) ? n.filter((l) => typeof l == "string") : [];
+  }, u = t.derived || {}, c = (n) => Array.isArray(n) ? n.filter((l) => typeof l == "string") : [];
   return {
     default_safety_mode: typeof r.default_safety_mode == "string" ? r.default_safety_mode : "read_only",
-    default_timeout_s: c("default_timeout_s"),
-    max_targets: c("max_targets"),
+    default_timeout_s: d("default_timeout_s"),
+    max_targets: d("max_targets"),
     auto_detect_local_models: r.auto_detect_local_models === !0,
     default_persistence: typeof r.default_persistence == "string" ? r.default_persistence : "ephemeral",
     synthesize_default: r.synthesize_default === !0,
-    enabled_agents: d(u.enabled_agents),
-    trusted_workspaces: d(u.trusted_workspaces),
-    role_dirs: d(u.role_dirs),
+    enabled_agents: c(u.enabled_agents),
+    trusted_workspaces: c(u.trusted_workspaces),
+    role_dirs: c(u.role_dirs),
     agents: (Array.isArray(t.agents) ? t.agents : []).map((n) => ({
       ...n,
       env: { ...n.env || {} },
@@ -599,38 +614,38 @@ function Te(t) {
 }
 function qe(t, r) {
   if (!r || typeof r != "object") return !1;
-  const c = (u, d) => String(u) === String(d);
-  for (const [u, d] of Object.entries(t)) {
+  const d = (u, c) => String(u) === String(c);
+  for (const [u, c] of Object.entries(t)) {
     const n = r[u];
     if (u === "agents") {
-      const l = d && typeof d == "object" ? Object.keys(d).sort() : [], m = n && typeof n == "object" ? Object.keys(n).sort() : [];
+      const l = c && typeof c == "object" ? Object.keys(c).sort() : [], m = n && typeof n == "object" ? Object.keys(n).sort() : [];
       if (l.length !== m.length || l.some((f, g) => f !== m[g])) return !1;
       continue;
     }
-    if (Array.isArray(d)) {
-      if (!Array.isArray(n) || n.length !== d.length || d.some((l, m) => !c(l, n[m]))) return !1;
+    if (Array.isArray(c)) {
+      if (!Array.isArray(n) || n.length !== c.length || c.some((l, m) => !d(l, n[m]))) return !1;
       continue;
     }
-    if (!c(d, n)) return !1;
+    if (!d(c, n)) return !1;
   }
   return !0;
 }
-function Oe(t, r) {
-  const c = { ...t.config };
-  delete c.agents;
+function Pe(t, r) {
+  const d = { ...t.config };
+  delete d.agents;
   const u = (l, m) => {
-    if (m.trim() === "") delete c[l];
+    if (m.trim() === "") delete d[l];
     else {
       const f = Number(m);
-      Number.isNaN(f) || (c[l] = f);
+      Number.isNaN(f) || (d[l] = f);
     }
   };
-  c.default_safety_mode = r.default_safety_mode, u("default_timeout_s", r.default_timeout_s), u("max_targets", r.max_targets), c.auto_detect_local_models = r.auto_detect_local_models, c.default_persistence = r.default_persistence, c.synthesize_default = r.synthesize_default;
-  const d = (l, m) => {
+  d.default_safety_mode = r.default_safety_mode, u("default_timeout_s", r.default_timeout_s), u("max_targets", r.max_targets), d.auto_detect_local_models = r.auto_detect_local_models, d.default_persistence = r.default_persistence, d.synthesize_default = r.synthesize_default;
+  const c = (l, m) => {
     const f = m.map((g) => g.trim()).filter(Boolean);
-    f.length ? c[l] = f : delete c[l];
+    f.length ? d[l] = f : delete d[l];
   };
-  d("enabled_agents", r.enabled_agents), d("trusted_workspaces", r.trusted_workspaces), d("role_dirs", r.role_dirs);
+  c("enabled_agents", r.enabled_agents), c("trusted_workspaces", r.trusted_workspaces), c("role_dirs", r.role_dirs);
   const n = {};
   for (const l of r.agents) {
     const m = l.id.trim();
@@ -638,54 +653,54 @@ function Oe(t, r) {
     const f = { ...l.extra };
     l.default_model != null && String(l.default_model).trim() !== "" && (f.default_model = l.default_model), f.enabled = l.enabled, l.env && Object.keys(l.env).length && (f.env = l.env), n[m] = f;
   }
-  return Object.keys(n).length && (c.agents = n), c;
+  return Object.keys(n).length && (d.agents = n), d;
 }
 function xe({
   value: t,
   options: r,
-  freeText: c,
+  freeText: d,
   onChange: u,
-  listId: d,
+  listId: c,
   placeholder: n
 }) {
   const l = Array.isArray(r) ? r : [];
-  return c ? /* @__PURE__ */ a(I, { children: [
+  return d ? /* @__PURE__ */ a(I, { children: [
     /* @__PURE__ */ e(
       "input",
       {
-        className: R,
+        className: z,
         value: t,
-        list: d,
+        list: c,
         placeholder: n,
         onChange: (m) => u(m.target.value)
       }
     ),
-    /* @__PURE__ */ e("datalist", { id: d, children: l.map((m) => /* @__PURE__ */ e("option", { value: m }, m)) })
-  ] }) : /* @__PURE__ */ a("select", { className: R, value: t, onChange: (m) => u(m.target.value), children: [
+    /* @__PURE__ */ e("datalist", { id: c, children: l.map((m) => /* @__PURE__ */ e("option", { value: m }, m)) })
+  ] }) : /* @__PURE__ */ a("select", { className: z, value: t, onChange: (m) => u(m.target.value), children: [
     t !== "" && !l.includes(t) && /* @__PURE__ */ e("option", { value: t, children: t }),
     l.map((m) => /* @__PURE__ */ e("option", { value: m, children: m }, m))
   ] });
 }
-function Pe({
+function Le({
   config: t,
   meta: r,
-  scope: c,
+  scope: d,
   onScope: u,
-  onSave: d
+  onSave: c
 }) {
-  const [n, l] = k(null), [m, f] = k(!1), [g, _] = k(null), i = Array.isArray(r == null ? void 0 : r.safety_modes) && r.safety_modes.length ? r.safety_modes : Re, v = Array.isArray(r == null ? void 0 : r.persistence) && r.persistence.length ? r.persistence : $e, S = Array.isArray(r == null ? void 0 : r.agent_ids) ? r.agent_ids : [], D = fe(r), B = !!t && t.scope === c;
+  const [n, l] = k(null), [m, f] = k(!1), [g, _] = k(null), i = Array.isArray(r == null ? void 0 : r.safety_modes) && r.safety_modes.length ? r.safety_modes : ze, v = Array.isArray(r == null ? void 0 : r.persistence) && r.persistence.length ? r.persistence : $e, S = Array.isArray(r == null ? void 0 : r.agent_ids) ? r.agent_ids : [], D = fe(r), B = !!t && t.scope === d;
   Q(() => {
-    if (!t || t.scope !== c) {
+    if (!t || t.scope !== d) {
       l((o) => o ?? null);
       return;
     }
     _(null), l(Te(t));
-  }, [t, c]);
+  }, [t, d]);
   const b = (o) => l(($) => $ && { ...$, ...o }), W = async () => {
     if (!(!t || !n)) {
       f(!0), _(null);
       try {
-        await d(c, Oe(t, n)), _({ ok: !0, text: `Saved to ${c} config.toml (backup written).` });
+        await c(d, Pe(t, n)), _({ ok: !0, text: `Saved to ${d} config.toml (backup written).` });
       } catch (o) {
         _({ ok: !1, text: o instanceof Error ? o.message : String(o) });
       } finally {
@@ -699,7 +714,7 @@ function Pe({
         "button",
         {
           onClick: () => u(o),
-          className: "px-3 py-1.5 text-sm rounded transition-colors " + (c === o ? "bg-[var(--accent,#6366f1)] text-white" : "bg-[var(--surface-2,#2a2a2a)] text-muted hover:text-[var(--fg,#eee)]"),
+          className: "px-3 py-1.5 text-sm rounded transition-colors " + (d === o ? "bg-[var(--accent,#6366f1)] text-white" : "bg-[var(--surface-2,#2a2a2a)] text-muted hover:text-[var(--fg,#eee)]"),
           children: o === "global" ? "Global" : "Workspace"
         },
         o
@@ -713,7 +728,7 @@ function Pe({
           children: [
             /* @__PURE__ */ e(ne, { size: 14 }),
             " ",
-            m ? "Saving…" : `Save ${c}`
+            m ? "Saving…" : `Save ${d}`
           ]
         }
       )
@@ -734,11 +749,11 @@ function Pe({
     ),
     !B || !n ? /* @__PURE__ */ a("p", { className: "text-sm text-muted", children: [
       "Loading ",
-      c,
+      d,
       " config…"
     ] }) : /* @__PURE__ */ a(I, { children: [
       /* @__PURE__ */ a(q, { children: [
-        /* @__PURE__ */ e(O, { children: "Defaults" }),
+        /* @__PURE__ */ e(P, { children: "Defaults" }),
         /* @__PURE__ */ e(V, { meta: t }),
         !t.exists && /* @__PURE__ */ a("p", { className: "text-xs text-muted mt-2", children: [
           "No ",
@@ -759,7 +774,7 @@ function Pe({
               children: /* @__PURE__ */ e(
                 "select",
                 {
-                  className: R,
+                  className: z,
                   value: n.default_safety_mode,
                   onChange: (o) => b({ default_safety_mode: o.target.value }),
                   children: i.map((o) => /* @__PURE__ */ e("option", { value: o, children: o }, o))
@@ -779,7 +794,7 @@ function Pe({
                 "input",
                 {
                   type: "number",
-                  className: R,
+                  className: z,
                   value: n.default_timeout_s,
                   onChange: (o) => b({ default_timeout_s: o.target.value })
                 }
@@ -798,7 +813,7 @@ function Pe({
                 "input",
                 {
                   type: "number",
-                  className: R,
+                  className: z,
                   value: n.max_targets,
                   onChange: (o) => b({ max_targets: o.target.value })
                 }
@@ -816,7 +831,7 @@ function Pe({
               children: /* @__PURE__ */ e(
                 "select",
                 {
-                  className: R,
+                  className: z,
                   value: n.default_persistence,
                   onChange: (o) => b({ default_persistence: o.target.value }),
                   children: v.map((o) => /* @__PURE__ */ e("option", { value: o, children: o }, o))
@@ -852,7 +867,7 @@ function Pe({
       ] }),
       /* @__PURE__ */ e("div", { className: "h-3" }),
       /* @__PURE__ */ a(q, { children: [
-        /* @__PURE__ */ e(O, { children: "Allowlists & directories" }),
+        /* @__PURE__ */ e(P, { children: "Allowlists & directories" }),
         /* @__PURE__ */ a("div", { className: "grid gap-4 grid-cols-[repeat(auto-fit,minmax(240px,1fr))] mt-3", children: [
           /* @__PURE__ */ e(
             le,
@@ -894,7 +909,7 @@ function Pe({
       ] }),
       /* @__PURE__ */ e("div", { className: "h-3" }),
       /* @__PURE__ */ a(q, { children: [
-        /* @__PURE__ */ e(O, { children: "Per-agent overrides" }),
+        /* @__PURE__ */ e(P, { children: "Per-agent overrides" }),
         /* @__PURE__ */ a("p", { className: "text-[11px] text-muted mt-1 flex items-center flex-wrap", children: [
           /* @__PURE__ */ e("code", { className: "text-[10px] opacity-70", children: "[agents.*]" }),
           /* @__PURE__ */ e("span", { className: "ml-1.5", children: "per-agent default model and enabled flag." }),
@@ -933,7 +948,7 @@ function Pe({
                 /* @__PURE__ */ e(
                   "input",
                   {
-                    className: R + " flex-1",
+                    className: z + " flex-1",
                     value: o.default_model ?? "",
                     placeholder: "Default model (blank = agent default)",
                     onChange: (y) => {
@@ -992,7 +1007,7 @@ const se = [
   { key: "label", label: "label", placeholder: "result key" },
   { key: "stance", label: "stance", placeholder: "for / against / neutral" }
 ];
-function Le(t) {
+function Oe(t) {
   return {
     ...t,
     seats: (Array.isArray(t.seats) ? t.seats : []).map((r) => ({ ...r })),
@@ -1016,15 +1031,15 @@ function Me(t) {
     strategy: (r.strategy || "").trim(),
     targets: (r.seats || []).length,
     extra: r.extra || {},
-    seats: (r.seats || []).map((c) => {
-      const u = { cli: String(c.cli || "").trim() };
-      for (const [d, n] of Object.entries(c))
-        if (d !== "cli" && n != null)
+    seats: (r.seats || []).map((d) => {
+      const u = { cli: String(d.cli || "").trim() };
+      for (const [c, n] of Object.entries(d))
+        if (c !== "cli" && n != null)
           if (typeof n == "string") {
             const l = n.trim();
-            l !== "" && (u[d] = l);
+            l !== "" && (u[c] = l);
           } else
-            u[d] = n;
+            u[c] = n;
       return u;
     })
   }));
@@ -1032,9 +1047,9 @@ function Me(t) {
 function Ie({
   seat: t,
   meta: r,
-  index: c,
+  index: d,
   onChange: u,
-  onRemove: d
+  onRemove: c
 }) {
   const n = (i, v) => u({ ...t, [i]: v }), l = Array.isArray(r == null ? void 0 : r.agent_ids) ? r.agent_ids : [], m = fe(r), f = Array.isArray(r == null ? void 0 : r.roles) ? r.roles : [], g = /* @__PURE__ */ new Set([
     "cli",
@@ -1056,7 +1071,7 @@ function Ie({
             value: t.cli != null ? String(t.cli) : "",
             options: l,
             freeText: m,
-            listId: `seat-cli-${c}`,
+            listId: `seat-cli-${d}`,
             placeholder: "agent id (required)",
             onChange: (i) => n("cli", i)
           }
@@ -1067,7 +1082,7 @@ function Ie({
         /* @__PURE__ */ e(
           "input",
           {
-            className: R,
+            className: z,
             value: t[i.key] != null ? String(t[i.key]) : "",
             placeholder: i.placeholder,
             onChange: (v) => n(i.key, v.target.value)
@@ -1079,7 +1094,7 @@ function Ie({
         /* @__PURE__ */ a(
           "select",
           {
-            className: R,
+            className: z,
             value: t.role != null ? String(t.role) : "",
             onChange: (i) => n("role", i.target.value),
             children: [
@@ -1095,7 +1110,7 @@ function Ie({
         /* @__PURE__ */ e(
           "input",
           {
-            className: R,
+            className: z,
             value: t[i.key] != null ? String(t[i.key]) : "",
             placeholder: i.placeholder,
             onChange: (v) => n(i.key, v.target.value)
@@ -1107,7 +1122,7 @@ function Ie({
         /* @__PURE__ */ e(
           "input",
           {
-            className: R,
+            className: z,
             type: "number",
             value: t.weight != null ? String(t.weight) : "",
             placeholder: "—",
@@ -1146,7 +1161,7 @@ function Ie({
       "button",
       {
         className: "mt-1.5 flex items-center gap-1 text-[11px] text-muted hover:text-amber-500",
-        onClick: d,
+        onClick: c,
         title: "Remove seat",
         children: [
           /* @__PURE__ */ e(ie, { size: 12 }),
@@ -1159,19 +1174,19 @@ function Ie({
 function Be({
   panel: t,
   meta: r,
-  onChange: c,
+  onChange: d,
   onDelete: u
 }) {
-  const [d, n] = k(!1), l = Array.isArray(t.seats) ? t.seats : [], m = Array.isArray(r == null ? void 0 : r.strategies) && r.strategies.length ? r.strategies : Ee;
+  const [c, n] = k(!1), l = Array.isArray(t.seats) ? t.seats : [], m = Array.isArray(r == null ? void 0 : r.strategies) && r.strategies.length ? r.strategies : Ee;
   return /* @__PURE__ */ a("div", { className: "p-3 rounded bg-[var(--surface-2,#1e1e1e)] border border-[var(--border,#2a2a2a)]", children: [
     /* @__PURE__ */ a("div", { className: "grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]", children: [
       /* @__PURE__ */ e(M, { label: "Name", hint: "panel key", required: !0, children: /* @__PURE__ */ e(
         "input",
         {
-          className: R,
+          className: z,
           value: t.name,
           placeholder: "panel-name",
-          onChange: (f) => c({ ...t, name: f.target.value })
+          onChange: (f) => d({ ...t, name: f.target.value })
         }
       ) }),
       /* @__PURE__ */ e(
@@ -1183,9 +1198,9 @@ function Be({
           children: /* @__PURE__ */ a(
             "select",
             {
-              className: R,
+              className: z,
               value: t.strategy || "all-voices",
-              onChange: (f) => c({ ...t, strategy: f.target.value }),
+              onChange: (f) => d({ ...t, strategy: f.target.value }),
               children: [
                 t.strategy && !m.includes(t.strategy) && /* @__PURE__ */ e("option", { value: t.strategy, children: t.strategy }),
                 m.map((f) => /* @__PURE__ */ e("option", { value: f, children: f }, f))
@@ -1198,10 +1213,10 @@ function Be({
     /* @__PURE__ */ e("div", { className: "mt-2.5", children: /* @__PURE__ */ e(M, { label: "Description", hint: "description", children: /* @__PURE__ */ e(
       "input",
       {
-        className: R,
+        className: z,
         value: t.description || "",
         placeholder: "Human label for this panel",
-        onChange: (f) => c({ ...t, description: f.target.value })
+        onChange: (f) => d({ ...t, description: f.target.value })
       }
     ) }) }),
     /* @__PURE__ */ a("div", { className: "mt-3", children: [
@@ -1222,9 +1237,9 @@ function Be({
             index: g,
             onChange: (_) => {
               const i = l.slice();
-              i[g] = _, c({ ...t, seats: i });
+              i[g] = _, d({ ...t, seats: i });
             },
-            onRemove: () => c({ ...t, seats: l.filter((_, i) => i !== g) })
+            onRemove: () => d({ ...t, seats: l.filter((_, i) => i !== g) })
           },
           g
         )),
@@ -1232,7 +1247,7 @@ function Be({
           "button",
           {
             className: "flex items-center gap-1.5 px-2 py-1.5 text-sm text-muted hover:text-[var(--accent,#6366f1)] self-start",
-            onClick: () => c({ ...t, seats: [...l, { cli: "" }] }),
+            onClick: () => d({ ...t, seats: [...l, { cli: "" }] }),
             children: [
               /* @__PURE__ */ e(Z, { size: 14 }),
               " Add seat"
@@ -1241,7 +1256,7 @@ function Be({
         )
       ] })
     ] }),
-    /* @__PURE__ */ e("div", { className: "mt-3 pt-2.5 border-t border-[var(--border,#2a2a2a)] flex items-center", children: d ? /* @__PURE__ */ a("div", { className: "flex items-center gap-2 text-xs", children: [
+    /* @__PURE__ */ e("div", { className: "mt-3 pt-2.5 border-t border-[var(--border,#2a2a2a)] flex items-center", children: c ? /* @__PURE__ */ a("div", { className: "flex items-center gap-2 text-xs", children: [
       /* @__PURE__ */ a("span", { className: "text-amber-500", children: [
         "Delete “",
         t.name || "unnamed",
@@ -1272,15 +1287,15 @@ function Be({
 function Ke({
   panels: t,
   meta: r,
-  onSave: c
+  onSave: d
 }) {
-  const [u, d] = k("global"), [n, l] = k(null), [m, f] = k(!1), [g, _] = k(null), [i, v] = k(null), [S, D] = k(!1), b = (Array.isArray(t == null ? void 0 : t.sources) ? t.sources : []).find((y) => y.scope === u) || null, W = JSON.stringify((b == null ? void 0 : b.panels) ?? null) + "|" + u;
+  const [u, c] = k("global"), [n, l] = k(null), [m, f] = k(!1), [g, _] = k(null), [i, v] = k(null), [S, D] = k(!1), b = (Array.isArray(t == null ? void 0 : t.sources) ? t.sources : []).find((y) => y.scope === u) || null, W = JSON.stringify((b == null ? void 0 : b.panels) ?? null) + "|" + u;
   Q(() => {
     if (!b) {
       l(null);
       return;
     }
-    _(null), D(!1), l((b.panels || []).map(Le));
+    _(null), D(!1), l((b.panels || []).map(Oe));
   }, [W]);
   const h = (y, N) => l((C) => C && C.map((K, F) => F === y ? N : K)), o = () => {
     if (!n) return null;
@@ -1305,7 +1320,7 @@ function Ke({
     }
     f(!0), _(null), v(null), D(!1);
     try {
-      await c(u, Me(n)), _({ ok: !0, text: `Saved to ${u} panels.toon (backup written).` }), v(u);
+      await d(u, Me(n)), _({ ok: !0, text: `Saved to ${u} panels.toon (backup written).` }), v(u);
     } catch (N) {
       _({ ok: !1, text: N instanceof Error ? N.message : String(N) });
     } finally {
@@ -1318,7 +1333,7 @@ function Ke({
         "button",
         {
           onClick: () => {
-            v(null), D(!1), d(y);
+            v(null), D(!1), c(y);
           },
           className: "px-3 py-1.5 text-sm rounded transition-colors " + (u === y ? "bg-[var(--accent,#6366f1)] text-white" : "bg-[var(--surface-2,#2a2a2a)] text-muted hover:text-[var(--fg,#eee)]"),
           children: y === "global" ? "Global" : "Workspace"
@@ -1382,7 +1397,7 @@ function Ke({
       ] })
     ] }),
     /* @__PURE__ */ a(q, { children: [
-      /* @__PURE__ */ a(O, { children: [
+      /* @__PURE__ */ a(P, { children: [
         "Named panels · ",
         u
       ] }),
@@ -1430,12 +1445,12 @@ function We() {
 function Ge({
   roles: t,
   meta: r,
-  onFetchRole: c,
+  onFetchRole: d,
   onSave: u
 }) {
-  const [d, n] = k("global"), [l, m] = k(null), [f, g] = k(null), [_, i] = k(!1), [v, S] = k(null), [D, B] = k(!1), [b, W] = k(null), h = Array.isArray(t == null ? void 0 : t.sources) ? t.sources : [], o = h.find((s) => s.scope === d && s.editable !== !1) || null, $ = Array.isArray(o == null ? void 0 : o.roles) ? o.roles : [], y = Array.isArray(r == null ? void 0 : r.roles_builtin) && r.roles_builtin.length ? r.roles_builtin : Array.isArray(t == null ? void 0 : t.builtin) ? t.builtin.map((s) => s.name) : [], N = h.filter((s) => s.editable === !1), C = async (s) => {
+  const [c, n] = k("global"), [l, m] = k(null), [f, g] = k(null), [_, i] = k(!1), [v, S] = k(null), [D, B] = k(!1), [b, W] = k(null), h = Array.isArray(t == null ? void 0 : t.sources) ? t.sources : [], o = h.find((s) => s.scope === c && s.editable !== !1) || null, $ = Array.isArray(o == null ? void 0 : o.roles) ? o.roles : [], y = Array.isArray(r == null ? void 0 : r.roles_builtin) && r.roles_builtin.length ? r.roles_builtin : Array.isArray(t == null ? void 0 : t.builtin) ? t.builtin.map((s) => s.name) : [], N = h.filter((s) => s.editable === !1), C = async (s) => {
     W(s), S(null), B(!1);
-    const p = await c(d, s);
+    const p = await d(c, s);
     if (W(null), !p) {
       S({ ok: !1, text: `Could not open role “${s}”.` });
       return;
@@ -1459,7 +1474,7 @@ function Ge({
     i(!0), S(null);
     try {
       const p = l.name.trim();
-      if (await u(d, {
+      if (await u(c, {
         name: p,
         display_name: l.display_name || "",
         description: l.description || "",
@@ -1467,10 +1482,10 @@ function Ge({
         extra: l.extra || {}
       }), f && f !== p)
         try {
-          await u(d, { name: f, op: "delete" });
+          await u(c, { name: f, op: "delete" });
         } catch {
         }
-      S({ ok: !0, text: `Saved role “${p}” to ${d} (backup written).` }), g(p), m((E) => E && { ...E, _new: !1 });
+      S({ ok: !0, text: `Saved role “${p}” to ${c} (backup written).` }), g(p), m((E) => E && { ...E, _new: !1 });
     } catch (p) {
       S({ ok: !1, text: p instanceof Error ? p.message : String(p) });
     } finally {
@@ -1480,7 +1495,7 @@ function Ge({
     if (!(!l || !f)) {
       i(!0), S(null);
       try {
-        await u(d, { name: f, op: "delete" }), S({ ok: !0, text: `Deleted role “${f}” from ${d} (backup written).` }), F();
+        await u(c, { name: f, op: "delete" }), S({ ok: !0, text: `Deleted role “${f}” from ${c} (backup written).` }), F();
       } catch (s) {
         S({ ok: !1, text: s instanceof Error ? s.message : String(s) });
       } finally {
@@ -1496,7 +1511,7 @@ function Ge({
           onClick: () => {
             n(s), F(), S(null);
           },
-          className: "px-3 py-1.5 text-sm rounded transition-colors " + (d === s ? "bg-[var(--accent,#6366f1)] text-white" : "bg-[var(--surface-2,#2a2a2a)] text-muted hover:text-[var(--fg,#eee)]"),
+          className: "px-3 py-1.5 text-sm rounded transition-colors " + (c === s ? "bg-[var(--accent,#6366f1)] text-white" : "bg-[var(--surface-2,#2a2a2a)] text-muted hover:text-[var(--fg,#eee)]"),
           children: s === "global" ? "Global" : "Workspace"
         },
         s
@@ -1525,12 +1540,12 @@ function Ge({
     ),
     l && /* @__PURE__ */ a(I, { children: [
       /* @__PURE__ */ a(q, { children: [
-        /* @__PURE__ */ e(O, { children: /* @__PURE__ */ a("span", { className: "inline-flex items-center gap-1.5", children: [
+        /* @__PURE__ */ e(P, { children: /* @__PURE__ */ a("span", { className: "inline-flex items-center gap-1.5", children: [
           /* @__PURE__ */ e(ce, { size: 14 }),
           " ",
           l._new ? "New role" : `Edit role · ${f}`,
           " · ",
-          d
+          c
         ] }) }),
         o && /* @__PURE__ */ e(V, { meta: o }),
         /* @__PURE__ */ a("div", { className: "grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] mt-3", children: [
@@ -1544,7 +1559,7 @@ function Ge({
               children: /* @__PURE__ */ e(
                 "input",
                 {
-                  className: R,
+                  className: z,
                   value: l.name,
                   placeholder: "my-reviewer",
                   onChange: (s) => m((p) => p && { ...p, name: s.target.value })
@@ -1562,7 +1577,7 @@ function Ge({
               children: /* @__PURE__ */ e(
                 "input",
                 {
-                  className: R,
+                  className: z,
                   value: l.display_name,
                   placeholder: "My Reviewer",
                   onChange: (s) => m((p) => p && { ...p, display_name: s.target.value })
@@ -1581,7 +1596,7 @@ function Ge({
             children: /* @__PURE__ */ e(
               "input",
               {
-                className: R,
+                className: z,
                 value: l.description,
                 placeholder: "Short description of this persona",
                 onChange: (s) => m((p) => p && { ...p, description: s.target.value })
@@ -1599,7 +1614,7 @@ function Ge({
             children: /* @__PURE__ */ e(
               "textarea",
               {
-                className: R + " min-h-[220px] font-mono text-[12px] leading-relaxed",
+                className: z + " min-h-[220px] font-mono text-[12px] leading-relaxed",
                 value: l.body,
                 placeholder: "You are a principal-level reviewer. …",
                 onChange: (s) => m((p) => p && { ...p, body: s.target.value })
@@ -1626,7 +1641,7 @@ function Ge({
               children: [
                 /* @__PURE__ */ e(ne, { size: 14 }),
                 " ",
-                _ ? "Saving…" : `Save to ${d}`
+                _ ? "Saving…" : `Save to ${c}`
               ]
             }
           ),
@@ -1677,15 +1692,15 @@ function Ge({
       /* @__PURE__ */ e("div", { className: "h-3" })
     ] }),
     /* @__PURE__ */ a(q, { children: [
-      /* @__PURE__ */ e(O, { children: /* @__PURE__ */ a("span", { className: "inline-flex items-center gap-1.5", children: [
+      /* @__PURE__ */ e(P, { children: /* @__PURE__ */ a("span", { className: "inline-flex items-center gap-1.5", children: [
         /* @__PURE__ */ e(Ce, { size: 14 }),
         " Role files · ",
-        d,
+        c,
         " (editable)"
       ] }) }),
       o ? /* @__PURE__ */ e(V, { meta: o }) : /* @__PURE__ */ a("p", { className: "text-xs text-muted mt-1", children: [
         "No editable roles directory resolved for ",
-        d,
+        c,
         "."
       ] }),
       (o == null ? void 0 : o.error) && /* @__PURE__ */ e("p", { className: "text-xs text-amber-500 mt-1", children: o.error }),
@@ -1727,7 +1742,7 @@ function Ge({
     y.length > 0 && /* @__PURE__ */ a(I, { children: [
       /* @__PURE__ */ e("div", { className: "h-3" }),
       /* @__PURE__ */ a(q, { children: [
-        /* @__PURE__ */ e(O, { children: "Built-in personas (read-only reference)" }),
+        /* @__PURE__ */ e(P, { children: "Built-in personas (read-only reference)" }),
         /* @__PURE__ */ a("p", { className: "text-xs text-muted mt-1", children: [
           "These ship in the Rutherford server (not files) and cannot be edited here. Reference them from a panel seat's ",
           /* @__PURE__ */ e("code", { children: "role" }),
@@ -1748,7 +1763,7 @@ function Ge({
       (s) => Array.isArray(s.roles) && s.roles.length > 0 ? /* @__PURE__ */ a("div", { children: [
         /* @__PURE__ */ e("div", { className: "h-3" }),
         /* @__PURE__ */ a(q, { children: [
-          /* @__PURE__ */ a(O, { children: [
+          /* @__PURE__ */ a(P, { children: [
             "Role files · ",
             s.scope,
             " (read-only)"

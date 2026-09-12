@@ -859,16 +859,17 @@ function StringList({
   )
 }
 
-// An unambiguous switch. Renders a pill TRACK + a KNOB that slides
-// left(off)/right(on); the ON track uses a FIXED indigo (#4f46e5) fill with an
-// always-on solid border, NOT var(--accent) — the dashboard's --accent resolved
-// to a pale/near-white value on some themes that made the ON pill and its white
-// "ON" text invisible, so a fixed indigo + border stays legible on any surface.
-// The OFF track is muted/grey, with a small "ON"/"OFF" text affordance INSIDE
-// the track so state reads at a glance even for a viewer who can't distinguish
-// the hue. Proper role="switch" + aria-checked for assistive tech. `srLabel`
-// gives an accessible name to a bare (label-less) switch, e.g. a per-agent
-// Enabled cell.
+// An unambiguous switch. Styled entirely with INLINE styles because this app
+// ships NO CSS and NO Tailwind compiler — arbitrary Tailwind utility class names
+// (h-6 w-12 left-[26px] bg-[#4f46e5] etc.) only render if the host dashboard's
+// stylesheet happens to define them, which it does not, so class-driven track
+// geometry and fill never paint. Inline styles ALWAYS render, independent of any
+// stylesheet. Renders a pill TRACK + a KNOB that slides left(off)/right(on).
+// ON = filled in the THEME color var(--accent) (purple), with a #7c3aed purple
+// fallback when --accent is unset. OFF = empty (transparent) with a grey border.
+// No "ON"/"OFF" text — fill vs empty conveys state. Proper role="switch" +
+// aria-checked for assistive tech. `srLabel` gives an accessible name to a bare
+// (label-less) switch, e.g. a per-agent Enabled cell.
 function Switch({
   value,
   onChange,
@@ -878,6 +879,7 @@ function Switch({
   onChange: (v: boolean) => void
   srLabel?: string
 }) {
+  const [focused, setFocused] = useState(false)
   return (
     <button
       type="button"
@@ -885,39 +887,45 @@ function Switch({
       aria-checked={value}
       aria-label={srLabel}
       onClick={() => onChange(!value)}
-      className={
-        'relative inline-flex items-center shrink-0 h-6 w-12 rounded-full ' +
-        'transition-colors duration-150 outline-none ' +
-        'focus-visible:ring-2 focus-visible:ring-[var(--accent,#6366f1)] focus-visible:ring-offset-1 ' +
-        'focus-visible:ring-offset-[var(--surface,#111)] border ' +
-        // ON uses a FIXED indigo fill (not the theme --accent var, which the
-        // dashboard can resolve to a pale/near-white value that makes the pill
-        // and its white "ON" text invisible). A solid border shows the track on
-        // any surface in BOTH states.
-        (value
-          ? 'bg-[#4f46e5] border-[#4f46e5]'
-          : 'bg-[var(--surface-3,#3a3a3a)] border-[var(--border,#4a4a4a)]')
-      }
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        flex: 'none',
+        width: 40,
+        height: 22,
+        borderRadius: 9999,
+        cursor: 'pointer',
+        padding: 0,
+        boxSizing: 'border-box',
+        transition: 'background-color .15s, border-color .15s',
+        outline: 'none',
+        backgroundColor: value ? 'var(--accent, #7c3aed)' : 'transparent',
+        border: value
+          ? '1px solid var(--accent, #7c3aed)'
+          : '1px solid var(--border, #6b7280)',
+        boxShadow: focused ? '0 0 0 2px var(--accent, #7c3aed)' : 'none',
+      }}
     >
-      {/* State text affordance: ON hugs the left under the knob-at-right; OFF
-          hugs the right under the knob-at-left. */}
+      {/* Sliding knob — slides on a 40px track: OFF sits 2px from the left,
+          ON sits 2px from the right (40 - 16 - 2 = 22). Vertically centered:
+          22px track, 16px knob, top:2 leaves 2px + 2px = centered (border 1px
+          each side is included in box-sizing:border-box on the track). */}
       <span
-        className={
-          'absolute text-[9px] font-semibold leading-none tracking-wide select-none ' +
-          (value ? 'left-1.5 text-white' : 'right-1.5 text-[var(--fg,#eee)] opacity-70')
-        }
         aria-hidden="true"
-      >
-        {value ? 'ON' : 'OFF'}
-      </span>
-      {/* Sliding knob */}
-      <span
-        className={
-          'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm ' +
-          'transition-all duration-150 ' +
-          (value ? 'left-[26px]' : 'left-0.5')
-        }
-        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          top: 2,
+          left: value ? 22 : 2,
+          width: 16,
+          height: 16,
+          borderRadius: 9999,
+          backgroundColor: '#ffffff',
+          boxShadow: '0 1px 2px rgba(0,0,0,.35)',
+          transition: 'left .15s',
+        }}
       />
     </button>
   )
