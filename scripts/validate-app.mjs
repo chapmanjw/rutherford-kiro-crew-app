@@ -452,9 +452,115 @@ if (app === null || typeof app !== "object" || Array.isArray(app)) {
   enforceNamespacedMcpGrants(app);
 }
 
+/**
+ * F4 — backend route-contract guard.
+ *
+ * Kiro Crew RESERVES ``/api/apps/<app>/config`` for its own app-config store, so this app's
+ * config + panels read/write endpoints MUST live at NON-reserved paths under the app base:
+ * reads/writes at ``/rutherford-config`` and ``/rutherford-panels`` (never a bare ``/config``
+ * write). All routes are declared by ``register_routes(ctx) -> list[AppRoute]`` in
+ * ``backend/routes.py``. This guard asserts, dependency-free (a text scan of routes.py):
+ *   - the file exists and defines ``register_routes``,
+ *   - a PUT is registered for BOTH ``/rutherford-config`` and ``/rutherford-panels``
+ *     (the two write surfaces), and
+ *   - NO route path is a reserved bare ``/config`` (any method).
+ * If the panels write route were reverted to a reserved name (or dropped), this fails CI.
+ *
+ * v2 additions: the config UI also depends on GET ``/rutherford-meta`` (dropdown option sets) and
+ * on the roles editor's ``/rutherford-roles`` GET (list + single-role body) and PUT (create/edit/
+ * delete). This guard now also asserts those three are registered, so dropping any of them fails CI.
+ */
+function enforceBackendRouteContract() {
+  const rel = "backend/routes.py";
+  const path = join(root, rel);
+  if (!existsSync(path)) {
+    fail(`missing file: ${rel} (the app backend route module)`);
+    return;
+  }
+  const text = readFileSync(path, "utf8");
+  if (!/def\s+register_routes\s*\(/.test(text)) {
+    fail(`${rel}: missing register_routes(ctx) -> list[AppRoute] route registration function`);
+    return;
+  }
+  const routes = [];
+  const ROUTE_RE = /AppRoute\(\s*"(GET|PUT|POST|DELETE|PATCH)"\s*,\s*"([^"]+)"/g;
+  for (const m of text.matchAll(ROUTE_RE)) routes.push({ method: m[1], path: m[2] });
+
+  const hasGet = (p) => routes.some((r) => r.method === "GET" && r.path === p);
+  const hasPut = (p) => routes.some((r) => r.method === "PUT" && r.path === p);
+
+  if (!hasPut("/rutherford-config")) {
+    fail(`${rel}: no PUT route registered for "/rutherford-config" (the config write surface)`);
+  }
+  if (!hasPut("/rutherford-panels")) {
+    fail(
+      `${rel}: no PUT route registered for "/rutherford-panels" (the panels write surface). ` +
+        `Panels write must use the NON-reserved "/rutherford-panels" path — Kiro Crew reserves ` +
+        `/api/apps/<app>/config, so a write route must avoid reserved names.`,
+    );
+  }
+
+  // The v2 UI drives its dropdowns from GET /rutherford-meta (option sets:
+  // agent_ids/strategies/safety_modes/persistence/roles). Its absence would
+  // silently degrade every dropdown to free text, so assert it is registered.
+  if (!hasGet("/rutherford-meta")) {
+    fail(
+      `${rel}: no GET route registered for "/rutherford-meta" (the UI dropdown option-set surface: ` +
+        `agent_ids/strategies/safety_modes/persistence/roles).`,
+    );
+  }
+
+  // The roles editor reads AND writes at the NON-reserved "/rutherford-roles"
+  // base (GET lists + fetches one body; PUT does create/edit/delete). Assert
+  // BOTH — a missing GET breaks the editor's list/open, a missing PUT breaks
+  // save/delete. Both must avoid the reserved /config name (checked below).
+  if (!hasGet("/rutherford-roles")) {
+    fail(
+      `${rel}: no GET route registered for "/rutherford-roles" (the roles read surface: ` +
+        `listing + single-role body for the editor).`,
+    );
+  }
+  if (!hasPut("/rutherford-roles")) {
+    fail(
+      `${rel}: no PUT route registered for "/rutherford-roles" (the roles write surface: ` +
+        `create/edit/delete a role .md). Must use the NON-reserved "/rutherford-roles" path.`,
+    );
+  }
+
+  for (const r of routes) {
+    if (r.path === "/config") {
+      fail(
+        `${rel}: route ${r.method} "/config" uses the RESERVED app-config path. Kiro Crew reserves ` +
+          `/api/apps/<app>/config for its own store — this app's config endpoints must live at the ` +
+          `non-reserved "/rutherford-config".`,
+      );
+    }
+  }
+
+  // The Overview "Reachability" card renders the backend's reachability note
+  // verbatim. It must present configured state honestly, never a developer
+  // placeholder, and must never claim live reachability (available:true) from a
+  // read-only backend that cannot probe. That is now enforced BEHAVIORALLY: see
+  // the (kk) reachability-note case in test-validate-app.mjs, which AST-extracts
+  // the pure note-building logic, execs it for present- and absent-config
+  // scenarios, and asserts available===false + an honest, placeholder-free note.
+  // Here we keep only the structural guard that the helper still exists.
+  if (!/def\s+_reachability_note\s*\(/.test(text)) {
+    fail(
+      `${rel}: missing _reachability_note(...) helper — the honest configured-state summary the ` +
+        `Overview Reachability card renders instead of a placeholder.`,
+    );
+  }
+}
+
 // Regression guard for the orchestrator's implementation-spawn directive (F2). Runs unconditionally
 // (it does its own existence check on the prompt file) so it fires even if app.json is malformed.
 enforceImplementationAgentDirective();
+
+// Backend route-contract guard (F4): the config + panels write routes must live at their
+// non-reserved paths and never collide with Kiro Crew's reserved /config. Runs unconditionally
+// (its own existence check on backend/routes.py).
+enforceBackendRouteContract();
 
 // Validate the self-listing external-registry index (F3). Runs unconditionally (its own existence
 // check) so it fires even if app.json is malformed; the self-listing name match is skipped when

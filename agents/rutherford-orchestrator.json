@@ -19,5 +19,18 @@
   ],
   "resources": [
     "skill://~/.kiro/crew/skills/rutherford/*/SKILL.md"
-  ]
+  ],
+  "avatar": {
+    "kind": "ghost",
+    "traits": {
+      "tile": "#7c3aed",
+      "eyes": "sparkle",
+      "brows": "raised",
+      "mouth": "grin",
+      "accessory": "hardhat",
+      "prop": "wrench",
+      "blush": true,
+      "flip": false
+    }
+  }
 }

@@ -1,6 +1,6 @@
 {
   "name": "rutherford",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "displayName": "Rutherford",
   "description": "Give your AI coding agent a crew. Registers the Rutherford MCP server and ships skills plus an orchestrator agent to delegate, reach consensus, debate, review, and plan across Claude Code, Codex, Cursor, Goose, and more over the Agent Client Protocol.",
   "iconPath": "assets/icon.png",
@@ -39,6 +39,23 @@
       "args": ["rutherford-mcp-server@3.2.0"]
     }
   },
+  "ui": {
+    "entry": "dist/index.mjs",
+    "pages": [
+      {
+        "route": "/apps/rutherford",
+        "label": "Rutherford",
+        "icon": "Package",
+        "group": "Apps"
+      }
+    ]
+  },
+  "backend": {
+    "routes": "/api/apps/rutherford",
+    "hooks": {
+      "routes": "backend.routes:register_routes"
+    }
+  },
   "dependencies": {
     "managedBy": "app",
     "commands": ["uvx"]
@@ -47,6 +64,8 @@
     "os": ["macos", "linux", "windows"]
   },
   "permissions": {
-    "network": true
+    "network": true,
+    "api": ["/api/apps/rutherford"],
+    "storage": true
   }
 }
