@@ -611,10 +611,14 @@ function StatusView({ status }: { status: StatusResp | null }) {
           planning</strong> — read-only by default.
         </p>
         <p className="text-sm text-muted mt-2">
-          <strong>Setup:</strong> run <code className="text-xs">rutherford doctor</code> — a
-          real read-only per-agent health check that confirms your crew is installed and
-          answering. If nothing is installed yet, the setup-rutherford flow /{' '}
-          <code className="text-xs">rutherford setup</code> scaffolds config.
+          <strong>Setup:</strong> Rutherford runs as an MCP server that the{' '}
+          <code className="text-xs">rutherford-orchestrator</code> agent drives — there is no{' '}
+          <code className="text-xs">rutherford</code> command to type in a terminal. To check
+          your crew, ask <code className="text-xs">rutherford-orchestrator</code> in a Kiro Crew
+          session to run a health check: it calls the <code className="text-xs">doctor</code>{' '}
+          tool, a real read-only round trip per agent. To scaffold config the first time, ask it
+          to run <code className="text-xs">setup (write=true)</code> — everything is read-only by
+          default, so a bare <code className="text-xs">setup</code> only shows where config lives.
         </p>
         <p className="text-sm text-muted mt-2">
           <strong>Two ways to configure it:</strong>
@@ -629,8 +633,9 @@ function StatusView({ status }: { status: StatusResp | null }) {
           <li style={{ marginTop: 4 }}>
             <strong>Conversational</strong> — or just talk to Rutherford in a Kiro Crew session
             using the <code className="text-xs">rutherford-orchestrator</code> agent. It routes
-            your request to the right mode (delegate / consensus / debate / review / plan) and
-            can configure Rutherford for you.
+            your request to the right mode (delegate / consensus / debate / review / plan), can
+            run <code className="text-xs">doctor</code> / <code className="text-xs">setup</code>,
+            and can edit your config for you.
           </li>
         </ul>
       </Card>
@@ -943,10 +948,14 @@ function Switch({
         boxShadow: focused ? '0 0 0 2px var(--accent, #7c3aed)' : 'none',
       }}
     >
-      {/* Sliding knob — slides on a 40px track: OFF sits 2px from the left,
-          ON sits 2px from the right (40 - 16 - 2 = 22). Vertically centered:
-          22px track, 16px knob, top:2 leaves 2px + 2px = centered (border 1px
-          each side is included in box-sizing:border-box on the track). */}
+      {/* Sliding knob — slides on a 40px border-box track (1px border each
+          side). OFF sits 2px from the left edge. ON sits at left:20, NOT 22:
+          the 1px right border eats into the box-sizing:border-box width, so the
+          naive 40 - 16 - 2 = 22 would push the knob a pixel past its intended
+          gap. left:20 makes the ON knob's right gap (40 - 20 - 16 = 4, less the
+          1px border = 3px visual) match the OFF knob's left gap (2px inset + 1px
+          border = 3px visual), so both ends look evenly inset. Vertically
+          centered: 22px track, 16px knob, top:2 leaves 2px + 2px. */}
       <span
         aria-hidden="true"
         style={{
