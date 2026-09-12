@@ -1883,6 +1883,14 @@ function PanelsView({
   const [drafts, setDrafts] = useState<PanelRec[] | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // True only after a confirmed disk write for the CURRENT scope. Gates the
+  // honest "how to make a running Rutherford pick this up" affordance below —
+  // the app backend CANNOT itself invoke the reload_panels MCP tool (the
+  // AppContext SDK exposes cron/events/storage/spawn/job only; the Rutherford
+  // MCP server runs in a separate uvx process the backend has no client into),
+  // so we tell the user the truth instead of faking a reload.
+  const [justSaved, setJustSaved] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const sources = Array.isArray(panels?.sources) ? panels!.sources : []
   const source = sources.find((s) => s.scope === scope) || null
@@ -1897,6 +1905,8 @@ function PanelsView({
       return
     }
     setSaveMsg(null)
+    setJustSaved(false)
+    setCopied(false)
     setDrafts((source.panels || []).map(clonePanel))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey])
@@ -1929,9 +1939,12 @@ function PanelsView({
     }
     setSaving(true)
     setSaveMsg(null)
+    setJustSaved(false)
+    setCopied(false)
     try {
       await onSave(scope, panelsToBody(drafts))
       setSaveMsg({ ok: true, text: `Saved to ${scope} panels.toon (backup written).` })
+      setJustSaved(true)
     } catch (e) {
       setSaveMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -1974,6 +1987,41 @@ function PanelsView({
         >
           {saveMsg.ok ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
           {saveMsg.text}
+        </div>
+      )}
+
+      {justSaved && (
+        <div className="flex items-start gap-2 text-sm mb-4 rounded border border-[var(--border,#333)] bg-[var(--surface-2,#2a2a2a)] px-3 py-2.5">
+          <Info size={15} className="mt-0.5 shrink-0 text-[var(--accent,#6366f1)]" />
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[var(--fg,#eee)]">
+              Panels were written to disk. A Rutherford server that is already running
+              still holds the OLD panels in memory — it picks these up on its next run,
+              or immediately when you run the <code>reload_panels</code> tool.
+            </span>
+            <span className="text-xs text-muted">
+              This app cannot reload Rutherford for you: the MCP server runs in a separate
+              process the backend has no client into. Run the tool in your agent session.
+            </span>
+            <button
+              onClick={() => {
+                const instr = 'reload_panels'
+                const done = () => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 2000)
+                }
+                try {
+                  navigator.clipboard?.writeText(instr).then(done, () => setCopied(false))
+                } catch {
+                  setCopied(false)
+                }
+              }}
+              className="self-start flex items-center gap-1.5 px-2.5 py-1 text-xs rounded bg-[var(--surface,#1e1e1e)] border border-[var(--border,#333)] text-[var(--fg,#eee)] hover:border-[var(--accent,#6366f1)]"
+            >
+              {copied ? <CheckCircle2 size={13} /> : <RefreshCw size={13} />}
+              {copied ? 'Copied' : 'Copy reload_panels'}
+            </button>
+          </div>
         </div>
       )}
 
