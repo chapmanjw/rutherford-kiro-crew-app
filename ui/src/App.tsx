@@ -1889,7 +1889,7 @@ function PanelsView({
   // AppContext SDK exposes cron/events/storage/spawn/job only; the Rutherford
   // MCP server runs in a separate uvx process the backend has no client into),
   // so we tell the user the truth instead of faking a reload.
-  const [justSaved, setJustSaved] = useState(false)
+  const [savedScope, setSavedScope] = useState<'global' | 'workspace' | null>(null)
   const [copied, setCopied] = useState(false)
 
   const sources = Array.isArray(panels?.sources) ? panels!.sources : []
@@ -1905,7 +1905,6 @@ function PanelsView({
       return
     }
     setSaveMsg(null)
-    setJustSaved(false)
     setCopied(false)
     setDrafts((source.panels || []).map(clonePanel))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1939,12 +1938,12 @@ function PanelsView({
     }
     setSaving(true)
     setSaveMsg(null)
-    setJustSaved(false)
+    setSavedScope(null)
     setCopied(false)
     try {
       await onSave(scope, panelsToBody(drafts))
       setSaveMsg({ ok: true, text: `Saved to ${scope} panels.toon (backup written).` })
-      setJustSaved(true)
+      setSavedScope(scope)
     } catch (e) {
       setSaveMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -1958,7 +1957,7 @@ function PanelsView({
         {(['global', 'workspace'] as const).map((s) => (
           <button
             key={s}
-            onClick={() => setScope(s)}
+            onClick={() => { setSavedScope(null); setCopied(false); setScope(s) }}
             className={
               'px-3 py-1.5 text-sm rounded transition-colors ' +
               (scope === s
@@ -1990,7 +1989,7 @@ function PanelsView({
         </div>
       )}
 
-      {justSaved && (
+      {savedScope === scope && (
         <div className="flex items-start gap-2 text-sm mb-4 rounded border border-[var(--border,#333)] bg-[var(--surface-2,#2a2a2a)] px-3 py-2.5">
           <Info size={15} className="mt-0.5 shrink-0 text-[var(--accent,#6366f1)]" />
           <div className="flex flex-col gap-1.5">

@@ -730,6 +730,50 @@ behaviorCase("(ii) role delete rejects an errored listing as deletion proof (App
   }
 });
 
+// (jj) PANELS-CONTRACT: the PanelsView post-save reload-guidance affordance must be keyed on the
+//      SAVED SCOPE, not a transient boolean. The old `justSaved` boolean flashed and vanished: the
+//      `[sourceKey]` effect ran setJustSaved(false), and savePanels refreshes `panels` after a
+//      confirmed write -> sourceKey changes -> effect clears the flag -> banner disappears. Fix keys
+//      the gate on savedScope so a `panels` refresh at the same scope does NOT clear it.
+//
+//      This is a SOURCE CONTRACT check (the UI TypeScript is not unit-runnable in this Node harness),
+//      in the same shape as (hh)/(ii). It asserts:
+//        (a) `savedScope === scope` gates the reload guidance,
+//        (b) `setSavedScope(scope)` appears in the confirmed-save path,
+//        (c) the `[sourceKey]` effect body does NOT contain `setSavedScope(`.
+//
+//      Falsifiable: reverting to the boolean `justSaved` form removes `savedScope === scope`
+//      (breaks (a)) and `setSavedScope(scope)` (breaks (b)); moving a reset back into the effect
+//      breaks (c). Verified by temporarily reverting to the boolean form and observing the failure.
+behaviorCase("(jj) panels reload-guidance keys on saved scope, not a transient boolean (App.tsx contract)", () => {
+  const appPath = join(repoRoot, "ui", "src", "App.tsx");
+  if (!existsSync(appPath)) throw new Error(`missing ${appPath}`);
+  const src = readFileSync(appPath, "utf8");
+
+  // (a) The render gate must be `{savedScope === scope && (`.
+  if (!/\{\s*savedScope\s*===\s*scope\s*&&\s*\(/.test(src)) {
+    throw new Error("reload-guidance render gate is not keyed on `savedScope === scope`");
+  }
+
+  // (b) The confirmed-save path must set the scope: `setSavedScope(scope)`.
+  if (!/setSavedScope\(\s*scope\s*\)/.test(src)) {
+    throw new Error("confirmed-save path does not call `setSavedScope(scope)`");
+  }
+
+  // (c) The `[sourceKey]` effect body must NOT reset savedScope — that is what caused the flash.
+  //     Isolate the effect: from the useEffect whose deps are `[sourceKey]`. Node's regex has no
+  //     backward lookahead for the deps, so find the effect by locating the deps marker and walking
+  //     back to the nearest `useEffect(() => {` before it.
+  const depsAt = src.indexOf("}, [sourceKey])");
+  if (depsAt === -1) throw new Error("could not locate the `[sourceKey]` effect dependency array");
+  const effectStart = src.lastIndexOf("useEffect(() => {", depsAt);
+  if (effectStart === -1) throw new Error("could not locate the start of the `[sourceKey]` effect");
+  const effectBody = src.slice(effectStart, depsAt);
+  if (/setSavedScope\(/.test(effectBody)) {
+    throw new Error("the `[sourceKey]` effect body resets savedScope — this reintroduces the banner flash");
+  }
+});
+
 // --- report ---
 const total = passed + failed;
 if (failed) {
