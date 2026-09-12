@@ -449,16 +449,48 @@ export default function Rutherford() {
       let confirmed: RoleWriteResp | null = wrote(resp) ? (resp as RoleWriteResp) : null
       if (!confirmed) {
         if (isDelete) {
-          // Verify the single-role GET now 404s (deleted).
+          // Confirm deletion ONLY on EXPLICIT absence — never infer it from a
+          // thrown error or a bare null, which also arise from 403/500/timeout/
+          // offline and would falsely report a delete while the file survives.
+          //
+          // Two explicit-absence signals, either of which confirms:
+          //   1. The single-role GET returns a well-formed body with
+          //      exists === false (the backend's 404 payload, if the host
+          //      surfaces it rather than collapsing a non-OK response to null).
+          //   2. The role is absent from a WELL-FORMED roles listing for this
+          //      scope (a 200 the host cannot collapse to null). A malformed or
+          //      unreachable listing is NOT absence.
+          // Any thrown error, or a null/empty single-role response with no
+          // corroborating listing, leaves `confirmed` null → we throw below,
+          // surfacing an error and RETAINING the editor draft.
+          let sawExplicitAbsence = false
           try {
             const got = (await api.get(
               `${BASE}/rutherford-roles?scope=${scope}&name=${encodeURIComponent(payload.name)}`,
             )) as RoleGetResp | null
-            if (!got || (got as RoleGetResp).exists === false) {
-              confirmed = { scope, path: '', platform: '', written: true, deleted: true }
+            if (got && typeof got === 'object' && (got as RoleGetResp).exists === false) {
+              sawExplicitAbsence = true
             }
           } catch {
-            // A thrown 404 also proves deletion.
+            // A non-404 throw (or a 404 the host raises) is NOT, on its own,
+            // proof of deletion — fall through to the authoritative listing.
+          }
+          if (!sawExplicitAbsence) {
+            try {
+              const listing = (await api.get(`${BASE}/rutherford-roles`)) as RolesResp | null
+              // Require a well-formed listing: a real sources array with an
+              // entry for this scope. Absent that, we cannot assert absence.
+              const sources = Array.isArray(listing?.sources) ? listing!.sources : null
+              const src = sources ? sources.find((s) => s.scope === scope) : undefined
+              if (src && Array.isArray(src.roles)) {
+                const stillThere = src.roles.some((r) => r.name === payload.name)
+                if (!stillThere) sawExplicitAbsence = true
+              }
+            } catch {
+              /* unreachable listing is not absence — leave unconfirmed */
+            }
+          }
+          if (sawExplicitAbsence) {
             confirmed = { scope, path: '', platform: '', written: true, deleted: true }
           }
         } else {
@@ -476,7 +508,9 @@ export default function Rutherford() {
 
       if (!confirmed) {
         throw new Error(
-          'Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your edits were kept; try Save again.',
+          isDelete
+            ? 'Delete could not be confirmed — the role file may still exist (a non-404 error, empty response, or unreachable server). Nothing was closed; your draft was kept. Try Delete again.'
+            : 'Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your edits were kept; try Save again.',
         )
       }
 

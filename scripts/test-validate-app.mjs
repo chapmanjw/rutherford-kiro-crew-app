@@ -514,6 +514,181 @@ testCase(
   /rutherford-roles/i,
 );
 
+// --- F5: roles-path BEHAVIORAL tests (guard FIX 1 delete-verification + FIX 2 frontmatter round-trip) ---
+//
+// These are FALSIFIABLE behavior tests, not registration checks: each fails if the
+// corresponding fix is reverted.
+
+// A lightweight assertion recorder for behavior tests that don't run the JS validator.
+function behaviorCase(label, fn) {
+  try {
+    fn();
+    passed++;
+    console.log(`  ✓ ${label}`);
+  } catch (e) {
+    failed++;
+    console.error(`  ✗ ${label} — ${e && e.message ? e.message : e}`);
+  }
+}
+
+console.log("\nRoles-path behavior tests:\n");
+
+// Resolve a Python interpreter for the round-trip test. On this platform `python`,
+// `py`, and `python3` are all viable; pick the first that answers --version.
+function resolvePython() {
+  for (const cand of ["python", "py", "python3"]) {
+    try {
+      execFileSync(cand, ["--version"], { stdio: ["ignore", "pipe", "pipe"] });
+      return cand;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
+// (ff) FRONTMATTER ROUND-TRIP (guards FIX 2): the REAL backend serializer/parser must
+//      satisfy parse(emit(x)) == x for values containing a double quote, a backslash,
+//      both, a leading/trailing space, a colon, and a normal value.
+//
+//      We exercise the ACTUAL functions in backend/routes.py — not a JS re-implementation —
+//      by AST-extracting the pure frontmatter helpers from the source and exec'ing them in a
+//      throwaway Python process. routes.py imports aiohttp at module top (absent in the plain
+//      interpreter), so importing the module wholesale is not possible here; slicing out the
+//      self-contained stdlib-only helpers runs the genuine code without that dependency.
+//
+//      Falsifiable: if FIX 2's unescaping is reverted (parser stops reversing \\ and \"),
+//      the quote/backslash/both cases no longer round-trip and this test FAILS.
+behaviorCase("(ff) role frontmatter round-trips a quote + backslash (real backend helpers)", () => {
+  const py = resolvePython();
+  if (!py) throw new Error("no Python interpreter found (python/py/python3)");
+  const routesPath = join(repoRoot, "backend", "routes.py");
+  if (!existsSync(routesPath)) throw new Error(`missing ${routesPath}`);
+
+  // Python driver: AST-extract the pure helpers, exec them, assert round-trip for all cases.
+  const driver = [
+    "import ast, sys, json",
+    "src = open(sys.argv[1], encoding='utf-8').read()",
+    "want = {'_parse_role_md','_fm_scalar_needs_quote','_emit_fm_scalar','_unescape_fm_double_quoted','_serialize_role_md','_role_roundtrip_ok'}",
+    "segs=[ast.get_source_segment(src,n) for n in ast.parse(src).body if isinstance(n,ast.FunctionDef) and n.name in want]",
+    "ns={}",
+    "exec('from typing import Any\\n' + '\\n\\n'.join(segs), ns)",
+    // Fail loudly if FIX 2's helper never made it into the source.
+    "assert '_unescape_fm_double_quoted' in ns, 'FIX 2 helper _unescape_fm_double_quoted missing from routes.py'",
+    "cases=['She said \\\"hi\\\"','back\\\\slash','q\\\"and\\\\b',' leading','trailing ','a: colon','normal value','\\\"','\\\\','\\\\\\\"']",
+    "bad=[]",
+    "for c in cases:",
+    "    role={'name':'x','display_name':'','description':c,'body':'\\nBody\\n','extra':{'note':c}}",
+    "    text=ns['_serialize_role_md'](role)",
+    "    p=ns['_parse_role_md'](text)",
+    "    if not (ns['_role_roundtrip_ok'](text) and p['description']==c and p['extra'].get('note')==c):",
+    "        bad.append(c)",
+    "if bad:",
+    "    print('ROUNDTRIP FAILED for: ' + json.dumps(bad)); sys.exit(3)",
+    "print('OK ' + str(len(cases)) + ' cases')",
+  ].join("\n");
+
+  let out;
+  try {
+    out = execFileSync(py, ["-c", driver, routesPath], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    const msg = (e.stdout ? e.stdout.toString() : "") + (e.stderr ? e.stderr.toString() : "");
+    throw new Error(`round-trip driver failed:\n${msg.trim()}`);
+  }
+  if (!/^OK \d+ cases/m.test(out)) throw new Error(`unexpected driver output: ${out.trim()}`);
+});
+
+// (gg) FRONTMATTER ROUND-TRIP is NON-VACUOUS (self-check of (ff)'s falsifiability):
+//      Prove the driver actually FAILS when the unescaping is reverted, by running the same
+//      helpers with `_unescape_fm_double_quoted` stubbed to identity (the pre-FIX-2 behavior).
+//      If this "reverted" variant still passed, (ff) would be vacuous. It must report failure.
+behaviorCase("(gg) round-trip test is falsifiable (reverting FIX 2 makes it fail)", () => {
+  const py = resolvePython();
+  if (!py) throw new Error("no Python interpreter found");
+  const routesPath = join(repoRoot, "backend", "routes.py");
+  const driver = [
+    "import ast, sys, json",
+    "src = open(sys.argv[1], encoding='utf-8').read()",
+    "want = {'_parse_role_md','_fm_scalar_needs_quote','_emit_fm_scalar','_unescape_fm_double_quoted','_serialize_role_md','_role_roundtrip_ok'}",
+    "segs=[ast.get_source_segment(src,n) for n in ast.parse(src).body if isinstance(n,ast.FunctionDef) and n.name in want]",
+    "ns={}",
+    "exec('from typing import Any\\n' + '\\n\\n'.join(segs), ns)",
+    // Simulate the pre-fix parser: unescaping becomes a no-op (identity).
+    "ns['_unescape_fm_double_quoted']=lambda v: v",
+    // Rebuild _parse_role_md so it uses the stubbed unescape from ns:
+    "exec(ast.get_source_segment(src,[n for n in ast.parse(src).body if isinstance(n,ast.FunctionDef) and n.name=='_parse_role_md'][0]), ns)",
+    // Cases chosen to FORCE quoting (a colon / leading quote makes _fm_scalar_needs_quote true),
+    // so the emitter actually escapes and the reverted parser's missing unescape truly breaks.
+    "cases=['a: said \\\"hi\\\"','\\\"lead quote','has: back\\\\slash']",
+    "roundtrips=True",
+    "for c in cases:",
+    "    role={'name':'x','display_name':'','description':c,'body':'\\nB\\n','extra':{}}",
+    "    text=ns['_serialize_role_md'](role)",
+    "    if ns['_parse_role_md'](text)['description']!=c:",
+    "        roundtrips=False",
+    "print('REVERTED_ROUNDTRIPS' if roundtrips else 'REVERTED_BROKEN')",
+  ].join("\n");
+  let out;
+  try {
+    out = execFileSync(py, ["-c", driver, routesPath], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    throw new Error("falsifiability driver errored: " + ((e.stdout || "") + (e.stderr || "")).toString());
+  }
+  if (!/REVERTED_BROKEN/.test(out)) {
+    throw new Error(
+      "reverting the unescape did NOT break the round-trip — (ff) would be vacuous. Output: " + out.trim(),
+    );
+  }
+});
+
+// (hh) DELETE-VERIFICATION CONTRACT (guards FIX 1): the role delete branch in ui/src/App.tsx must
+//      confirm deletion ONLY on explicit absence, and must NOT treat a thrown error or a bare null
+//      as a successful delete. The UI TypeScript is not unit-runnable in this Node harness, so we
+//      assert the SOURCE CONTRACT of saveRole's delete branch directly (a real, executable check —
+//      it reads the shipped source and fails if the permissive patterns return).
+//
+//      Falsifiable: reverting FIX 1 reintroduces `if (!got || ... exists === false)` and/or a
+//      `catch { confirmed = { ... deleted: true } }` in the delete branch, which this test rejects.
+behaviorCase("(hh) role delete confirms only on explicit absence (App.tsx contract)", () => {
+  const appPath = join(repoRoot, "ui", "src", "App.tsx");
+  if (!existsSync(appPath)) throw new Error(`missing ${appPath}`);
+  const src = readFileSync(appPath, "utf8");
+
+  // Isolate the delete branch: from `if (isDelete) {` to the `} else {` that begins the create/edit
+  // verification branch inside saveRole.
+  const start = src.indexOf("if (isDelete) {");
+  if (start === -1) throw new Error("could not locate the isDelete branch in saveRole");
+  const elseAt = src.indexOf("} else {", start);
+  if (elseAt === -1) throw new Error("could not locate the end of the isDelete branch");
+  const branch = src.slice(start, elseAt);
+
+  // 1) The bare-null-as-deletion pattern must be gone. Pre-fix code confirmed on `!got`.
+  if (/if\s*\(\s*!got\b/.test(branch)) {
+    throw new Error("delete branch still confirms on a bare null single-role response (`if (!got ...)`)");
+  }
+  // 2) A catch block must NOT set a confirmed/deleted success. Pre-fix code did
+  //    `catch { confirmed = { ... deleted: true } }`.
+  const catchBlocks = branch.match(/catch\s*(?:\([^)]*\))?\s*\{[\s\S]*?\}/g) || [];
+  for (const cb of catchBlocks) {
+    if (/confirmed\s*=/.test(cb) && /deleted:\s*true/.test(cb)) {
+      throw new Error("delete branch treats a thrown error as a successful delete (catch sets deleted:true)");
+    }
+  }
+  // 3) Positive contract: confirmation must be predicated on an explicit-absence signal —
+  //    an `exists === false` body OR absence from a well-formed listing (`!stillThere`/`!found`).
+  const hasExplicitAbsence =
+    /exists\s*===\s*false/.test(branch) &&
+    /(?:!\s*stillThere|!\s*found|!\s*\w*[Ss]tillThere)/.test(branch);
+  if (!hasExplicitAbsence) {
+    throw new Error(
+      "delete branch no longer predicates confirmation on explicit absence (exists===false AND listing-absence)",
+    );
+  }
+});
+
 // --- report ---
 const total = passed + failed;
 if (failed) {

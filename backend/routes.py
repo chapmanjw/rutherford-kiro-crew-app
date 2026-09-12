@@ -1243,7 +1243,13 @@ def _parse_role_md(text: str) -> dict[str, Any]:
                 key = k.strip()
                 val = v.strip()
                 if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                    quote = val[0]
                     val = val[1:-1]
+                    # Reverse _emit_fm_scalar's escaping. Only double-quoted
+                    # values are ever emitted with escapes (\\ -> \ and \" -> "),
+                    # so unescape exactly those two sequences and only for `"`.
+                    if quote == '"':
+                        val = _unescape_fm_double_quoted(val)
                 if key == "name":
                     name = val
                 elif key == "display_name":
@@ -1279,6 +1285,29 @@ def _emit_fm_scalar(value: str) -> str:
         esc = value.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{esc}"'
     return value
+
+
+def _unescape_fm_double_quoted(value: str) -> str:
+    """Inverse of _emit_fm_scalar's escaping for a double-quoted body.
+
+    The emitter produces exactly two escape sequences, in this order:
+    ``\\`` -> ``\\\\`` and ``"`` -> ``\\"``. Decode with a single left-to-right
+    scan so an escaped backslash is consumed as one unit and cannot combine with
+    a following quote (i.e. ``\\\\"`` decodes to ``\\`` + a closing/literal quote,
+    never to ``"``). Any other backslash sequence is left verbatim, since the
+    emitter never produces one."""
+    out: list[str] = []
+    i = 0
+    n = len(value)
+    while i < n:
+        ch = value[i]
+        if ch == "\\" and i + 1 < n and value[i + 1] in ('\\', '"'):
+            out.append(value[i + 1])
+            i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def _serialize_role_md(role: dict[str, Any]) -> str:
