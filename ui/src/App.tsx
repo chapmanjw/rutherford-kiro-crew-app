@@ -860,11 +860,15 @@ function StringList({
 }
 
 // An unambiguous switch. Renders a pill TRACK + a KNOB that slides
-// left(off)/right(on); the track is accent-filled when ON and muted/grey when
-// OFF, with a small "ON"/"OFF" text affordance INSIDE the track so state reads
-// at a glance even for a viewer who can't distinguish the accent hue. Proper
-// role="switch" + aria-checked for assistive tech. `srLabel` gives an
-// accessible name to a bare (label-less) switch, e.g. a per-agent Enabled cell.
+// left(off)/right(on); the ON track uses a FIXED indigo (#4f46e5) fill with an
+// always-on solid border, NOT var(--accent) — the dashboard's --accent resolved
+// to a pale/near-white value on some themes that made the ON pill and its white
+// "ON" text invisible, so a fixed indigo + border stays legible on any surface.
+// The OFF track is muted/grey, with a small "ON"/"OFF" text affordance INSIDE
+// the track so state reads at a glance even for a viewer who can't distinguish
+// the hue. Proper role="switch" + aria-checked for assistive tech. `srLabel`
+// gives an accessible name to a bare (label-less) switch, e.g. a per-agent
+// Enabled cell.
 function Switch({
   value,
   onChange,

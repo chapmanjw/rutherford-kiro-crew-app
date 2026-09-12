@@ -539,17 +539,12 @@ function enforceBackendRouteContract() {
 
   // The Overview "Reachability" card renders the backend's reachability note
   // verbatim. It must present configured state honestly, never a developer
-  // placeholder — assert the shipped source carries no "TODO" / "Phase 1.5"
-  // wording in the reachability construction. Reverting to the old placeholder
-  // note fails CI here.
-  const reach = text.match(/"reachability"[\s\S]{0,400}/);
-  const reachSrc = reach ? reach[0] : "";
-  if (/TODO/.test(reachSrc) || /Phase\s*1\.5/i.test(reachSrc)) {
-    fail(
-      `${rel}: the reachability note ships developer-placeholder wording ("TODO" / "Phase 1.5"). ` +
-        `The Overview card renders this verbatim to the user — it must state configured status honestly.`,
-    );
-  }
+  // placeholder, and must never claim live reachability (available:true) from a
+  // read-only backend that cannot probe. That is now enforced BEHAVIORALLY: see
+  // the (kk) reachability-note case in test-validate-app.mjs, which AST-extracts
+  // the pure note-building logic, execs it for present- and absent-config
+  // scenarios, and asserts available===false + an honest, placeholder-free note.
+  // Here we keep only the structural guard that the helper still exists.
   if (!/def\s+_reachability_note\s*\(/.test(text)) {
     fail(
       `${rel}: missing _reachability_note(...) helper — the honest configured-state summary the ` +

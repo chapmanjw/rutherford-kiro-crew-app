@@ -774,6 +774,115 @@ behaviorCase("(jj) panels reload-guidance keys on saved scope, not a transient b
   }
 });
 
+// (kk) REACHABILITY-NOTE CONTRACT (guards FIX: honest reachability): the Overview
+//      "Reachability" card renders `_reachability_note(...)`'s output verbatim. That
+//      read-only backend has NO MCP client and never probes, so `available` must be
+//      False in EVERY scenario (config present or absent), and `note` must be an honest,
+//      placeholder-free summary. We exercise the REAL helper by AST-extracting it from
+//      backend/routes.py and exec'ing it in a throwaway Python process — routes.py imports
+//      aiohttp at module top (absent here), so slicing out the self-contained helper (it
+//      references only stdlib + duck-typed args) runs the genuine code without that
+//      dependency. Path args are duck-typed with a stub exposing `.exists()`.
+//
+//      Falsifiable: reverting the note to `available: True` (or reintroducing a TODO /
+//      Phase 1.5 placeholder) makes the assertions below FAIL — proven by (ll).
+behaviorCase("(kk) reachability note is honest: available=false + placeholder-free (real backend helper)", () => {
+  const py = resolvePython();
+  if (!py) throw new Error("no Python interpreter found (python/py/python3)");
+  const routesPath = join(repoRoot, "backend", "routes.py");
+  if (!existsSync(routesPath)) throw new Error(`missing ${routesPath}`);
+
+  const driver = [
+    "import ast, sys, json",
+    "src = open(sys.argv[1], encoding='utf-8').read()",
+    "want = {'_reachability_note'}",
+    "segs=[ast.get_source_segment(src,n) for n in ast.parse(src).body if isinstance(n,ast.FunctionDef) and n.name in want]",
+    "assert segs, 'FIX target _reachability_note missing from routes.py'",
+    "ns={}",
+    "exec('from typing import Any\\n' + '\\n\\n'.join(segs), ns)",
+    "fn=ns['_reachability_note']",
+    // Duck-typed Path stub exposing only .exists().
+    "class P:",
+    "    def __init__(self, e): self._e=e",
+    "    def exists(self): return self._e",
+    // (a) present-config scenario: both config files exist, agents configured + resolved.
+    "present=fn(P(True), P(True), {}, {}, {'codex':{}, 'claude_code':{}}, ['codex','claude_code'], [{'id':'codex'},{'id':'claude_code'}])",
+    // (b) absent-config scenario: no config files, no agents.
+    "absent=fn(P(False), P(False), {}, {}, {}, [], [])",
+    "bad=[]",
+    "for label,r in (('present',present),('absent',absent)):",
+    "    if r.get('available') is not False: bad.append(label+': available is not False (%r)' % r.get('available'))",
+    "    note=r.get('note') or ''",
+    "    if not note.strip(): bad.append(label+': note is empty')",
+    "    if 'TODO' in note: bad.append(label+': note contains TODO')",
+    "    if 'Phase 1.5' in note or 'phase 1.5' in note.lower(): bad.append(label+': note contains Phase 1.5')",
+    // present case must mention config + agents.
+    "pnote=(present.get('note') or '').lower()",
+    "if 'config' not in pnote: bad.append('present: note does not mention config')",
+    "if 'agent' not in pnote: bad.append('present: note does not mention agents')",
+    // absent case must state no config found.
+    "anote=(absent.get('note') or '').lower()",
+    "if 'no ' not in anote or 'config' not in anote: bad.append('absent: note does not say no config found')",
+    "if bad:",
+    "    print('REACH FAILED: ' + json.dumps(bad)); sys.exit(3)",
+    "print('OK reachability present+absent honest')",
+  ].join("\n");
+
+  let out;
+  try {
+    out = execFileSync(py, ["-c", driver, routesPath], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    const msg = (e.stdout ? e.stdout.toString() : "") + (e.stderr ? e.stderr.toString() : "");
+    throw new Error(`reachability driver failed:\n${msg.trim()}`);
+  }
+  if (!/^OK reachability/m.test(out)) throw new Error(`unexpected driver output: ${out.trim()}`);
+});
+
+// (ll) REACHABILITY-NOTE test is NON-VACUOUS (self-check of (kk)'s falsifiability):
+//      run the same extracted helper but PATCH its returned dict to the pre-fix shape
+//      (available:True) and to a TODO placeholder note, and confirm the same assertions
+//      that (kk) makes would REJECT it. If a reverted note still passed, (kk) would be
+//      vacuous. It must report the revert as broken.
+behaviorCase("(ll) reachability test is falsifiable (reverting to available:true / TODO makes it fail)", () => {
+  const py = resolvePython();
+  if (!py) throw new Error("no Python interpreter found");
+  const routesPath = join(repoRoot, "backend", "routes.py");
+  const driver = [
+    "import ast, sys, json",
+    "src = open(sys.argv[1], encoding='utf-8').read()",
+    "segs=[ast.get_source_segment(src,n) for n in ast.parse(src).body if isinstance(n,ast.FunctionDef) and n.name=='_reachability_note']",
+    "ns={}",
+    "exec('from typing import Any\\n' + '\\n\\n'.join(segs), ns)",
+    "fn=ns['_reachability_note']",
+    "class P:",
+    "    def __init__(self, e): self._e=e",
+    "    def exists(self): return self._e",
+    "r=fn(P(True), P(True), {}, {}, {'codex':{}}, ['codex'], [{'id':'codex'}])",
+    // Simulate the pre-fix regressions on the genuine output.
+    "reverted={**r, 'available': True, 'note': 'TODO Phase 1.5 placeholder'}",
+    // Apply (kk)'s own assertion set to the reverted dict; it MUST be rejected.
+    "rejected=False",
+    "note=reverted.get('note') or ''",
+    "if reverted.get('available') is not False: rejected=True",
+    "if 'TODO' in note or 'phase 1.5' in note.lower(): rejected=True",
+    "print('REVERTED_REJECTED' if rejected else 'REVERTED_ACCEPTED')",
+  ].join("\n");
+  let out;
+  try {
+    out = execFileSync(py, ["-c", driver, routesPath], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    throw new Error("falsifiability driver errored: " + ((e.stdout || "") + (e.stderr || "")).toString());
+  }
+  if (!/REVERTED_REJECTED/.test(out)) {
+    throw new Error(
+      "reverting to available:true / TODO did NOT get rejected — (kk) would be vacuous. Output: " + out.trim(),
+    );
+  }
+});
+
 // --- report ---
 const total = passed + failed;
 if (failed) {

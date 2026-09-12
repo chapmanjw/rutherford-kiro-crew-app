@@ -703,7 +703,12 @@ def _reachability_note(
         f"Rutherford session — this read-only panel reports configured state, not a live probe."
     )
     return {
-        "available": True,
+        # available = LIVE reachability verified. This read-only backend has no
+        # MCP client and never probes, so it is ALWAYS False here — never conflate
+        # "config exists" with "agents reachable". Configured state lives in its
+        # own fields below, and `note` carries the honest summary.
+        "available": False,
+        "configured": bool(locations),
         "note": note,
         "config_present": bool(locations),
         "configured_agents": configured,
