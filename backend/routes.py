@@ -661,12 +661,63 @@ async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Res
         )
 
 
+def _reachability_note(
+    g_path: Path,
+    p_path: Path,
+    g_data: dict[str, Any],
+    p_data: dict[str, Any],
+    agents_by_id: dict[str, dict[str, Any]],
+    effective_enabled: list[str],
+    roster: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a truthful CONFIGURED-STATE reachability summary.
+
+    This backend cannot run a live doctor/MCP probe, so instead of claiming a
+    probe it did not do we report what config actually declares: which
+    config.toml files exist, how many agents are configured, how many resolve
+    into the effective roster, and where live connectivity is really checked.
+    """
+    locations: list[str] = []
+    if g_path.exists():
+        locations.append("global")
+    if p_path.exists():
+        locations.append("workspace")
+
+    configured = len(agents_by_id)
+    resolved = len(roster)
+
+    if locations:
+        where = " and ".join(locations)
+        cfg = f"Found a Rutherford config.toml ({where})."
+    else:
+        cfg = "No Rutherford config.toml found (global or workspace); built-in defaults apply."
+
+    if effective_enabled:
+        allow = f"{len(effective_enabled)} agent(s) allowlisted"
+    else:
+        allow = "no allowlist set (all built-ins enabled)"
+
+    note = (
+        f"{cfg} {configured} agent(s) configured, {resolved} in the effective roster; "
+        f"{allow}. Live per-agent connectivity is checked by running `doctor` in a "
+        f"Rutherford session — this read-only panel reports configured state, not a live probe."
+    )
+    return {
+        "available": True,
+        "note": note,
+        "config_present": bool(locations),
+        "configured_agents": configured,
+        "roster_agents": resolved,
+    }
+
+
 async def _handle_status(request: web.Request, ctx: AppContext) -> web.Response:
     """GET /status — resolved agent roster + config locations + acp + env.
 
-    Reachability (live doctor probe) is a Phase 1.5 TODO: it is not cleanly
-    callable from this in-process backend, so we return config-declared enabled
-    agents and mark reachability as a known gap.
+    Reachability here is a CONFIGURED-STATE summary, not a live probe: this
+    read-only backend has no MCP client (the AppContext SDK exposes only
+    cron/events/storage/spawn/job), so live per-agent connectivity is checked by
+    running ``doctor`` in a Rutherford session. We report what config declares.
     """
     g_path = _global_config_path()
     p_path, _ = _project_config_path()
@@ -734,10 +785,9 @@ async def _handle_status(request: web.Request, ctx: AppContext) -> web.Response:
         },
         "acp": _acp_sources(),
         "env_overrides": _env_overrides(),
-        "reachability": {
-            "available": False,
-            "note": "Live doctor reachability is a Phase 1.5 TODO — not probed by the read-only backend.",
-        },
+        "reachability": _reachability_note(
+            g_path, p_path, g_data, p_data, agents_by_id, effective_enabled, roster
+        ),
     }
     if g_err:
         payload["config_locations"]["global"]["error"] = g_err

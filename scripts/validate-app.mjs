@@ -536,6 +536,26 @@ function enforceBackendRouteContract() {
       );
     }
   }
+
+  // The Overview "Reachability" card renders the backend's reachability note
+  // verbatim. It must present configured state honestly, never a developer
+  // placeholder — assert the shipped source carries no "TODO" / "Phase 1.5"
+  // wording in the reachability construction. Reverting to the old placeholder
+  // note fails CI here.
+  const reach = text.match(/"reachability"[\s\S]{0,400}/);
+  const reachSrc = reach ? reach[0] : "";
+  if (/TODO/.test(reachSrc) || /Phase\s*1\.5/i.test(reachSrc)) {
+    fail(
+      `${rel}: the reachability note ships developer-placeholder wording ("TODO" / "Phase 1.5"). ` +
+        `The Overview card renders this verbatim to the user — it must state configured status honestly.`,
+    );
+  }
+  if (!/def\s+_reachability_note\s*\(/.test(text)) {
+    fail(
+      `${rel}: missing _reachability_note(...) helper — the honest configured-state summary the ` +
+        `Overview Reachability card renders instead of a placeholder.`,
+    );
+  }
 }
 
 // Regression guard for the orchestrator's implementation-spawn directive (F2). Runs unconditionally

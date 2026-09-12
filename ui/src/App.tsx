@@ -886,8 +886,12 @@ function Switch({
         'transition-colors duration-150 outline-none ' +
         'focus-visible:ring-2 focus-visible:ring-[var(--accent,#6366f1)] focus-visible:ring-offset-1 ' +
         'focus-visible:ring-offset-[var(--surface,#111)] border ' +
+        // ON uses a FIXED indigo fill (not the theme --accent var, which the
+        // dashboard can resolve to a pale/near-white value that makes the pill
+        // and its white "ON" text invisible). A solid border shows the track on
+        // any surface in BOTH states.
         (value
-          ? 'bg-[var(--accent,#6366f1)] border-[var(--accent,#6366f1)]'
+          ? 'bg-[#4f46e5] border-[#4f46e5]'
           : 'bg-[var(--surface-3,#3a3a3a)] border-[var(--border,#4a4a4a)]')
       }
     >
