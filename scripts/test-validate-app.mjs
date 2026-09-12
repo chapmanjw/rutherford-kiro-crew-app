@@ -465,6 +465,55 @@ testCase(
   /register_routes/i,
 );
 
+// (cc) GET /rutherford-meta route dropped -> fail
+//      Removes the meta route registration; the guard must fail, proving the UI's
+//      dropdown option-set surface is required (its absence degrades every dropdown
+//      to free text silently).
+testCase(
+  "(cc) missing GET /rutherford-meta route fails",
+  "fail",
+  (dir) => {
+    const t = readRoutes(dir).replace(
+      /\s*AppRoute\("GET",\s*"\/rutherford-meta",[^)]*\),/,
+      "",
+    );
+    writeRoutes(dir, t);
+  },
+  /rutherford-meta/i,
+);
+
+// (dd) GET /rutherford-roles route dropped -> fail
+//      Removes ONLY the GET roles registration (keeps the PUT), so the ONLY reason
+//      to fail is the missing roles read surface. Falsifiable for that assertion.
+testCase(
+  "(dd) missing GET /rutherford-roles route fails",
+  "fail",
+  (dir) => {
+    const t = readRoutes(dir).replace(
+      /\s*AppRoute\("GET",\s*"\/rutherford-roles",[^)]*\),/,
+      "",
+    );
+    writeRoutes(dir, t);
+  },
+  /rutherford-roles/i,
+);
+
+// (ee) PUT /rutherford-roles route dropped -> fail
+//      Removes ONLY the PUT roles registration (keeps the GET), so the ONLY reason
+//      to fail is the missing roles write surface. Falsifiable for that assertion.
+testCase(
+  "(ee) missing PUT /rutherford-roles route fails",
+  "fail",
+  (dir) => {
+    const t = readRoutes(dir).replace(
+      /\s*AppRoute\("PUT",\s*"\/rutherford-roles",[^)]*\),/,
+      "",
+    );
+    writeRoutes(dir, t);
+  },
+  /rutherford-roles/i,
+);
+
 // --- report ---
 const total = passed + failed;
 if (failed) {

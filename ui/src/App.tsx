@@ -8,10 +8,10 @@ import lucide from 'lucide-react'
 // parse-time "does not provide an export named ..." error. The shim's DEFAULT
 // export is a forwarding Proxy over the full lucide module, so destructuring off
 // the default import resolves any icon name. NEVER reintroduce named
-// `from 'lucide-react'` imports.
+// `from 'lucide-react'` imports — add new icons to THIS destructure instead.
 const {
   Box, FileCog, Layers, UserSquare, RefreshCw, AlertTriangle,
-  Save, Plus, X, CheckCircle2, Server, Trash2,
+  Save, Plus, X, CheckCircle2, Server, Trash2, Info, Pencil, FileText,
 } = lucide
 
 const BASE = '/api/apps/rutherford'
@@ -27,6 +27,24 @@ type AgentRow = {
 }
 
 type AcpSource = Meta & { agent_servers: Record<string, unknown> }
+
+// ---- /rutherford-meta — the option sets the UI renders dropdowns from -------
+// Every field is guarded to [] / '' on read (fetch may fail; the UI must degrade
+// to free text, never crash). agent_ids_source records HOW agent_ids was sourced
+// so the UI can decide select vs free-text-datalist.
+type MetaResp = {
+  platform: string
+  agent_ids: string[]
+  agent_ids_builtin: string[]
+  agent_ids_config_derived: string[]
+  agent_ids_source: string
+  strategies: string[]
+  safety_modes: string[]
+  persistence: string[]
+  roles: string[]
+  roles_builtin: string[]
+  error?: string
+}
 
 type StatusResp = {
   platform: string
@@ -83,9 +101,55 @@ type PanelsResp = {
 // on a confirmed persist, mirroring the config write contract.
 type PanelsWriteResp = Meta & { panels: PanelRec[]; written?: boolean }
 
+// ---- Roles ----------------------------------------------------------------
+// GET /rutherford-roles (listing): {platform, sources:[{...meta, editable, roles:[
+//   {name,file,path,description?,display_name?}]}], builtin:[{name}]}.
+// GET /rutherford-roles?scope&name (single body): {scope,path,exists,role:{name,
+//   display_name,description,body,extra}}.
+// PUT /rutherford-roles?scope (create/edit/delete): echoes written===true (+ sources).
+type RoleListItem = {
+  name: string
+  file?: string
+  path?: string
+  description?: string
+  display_name?: string
+  error?: string
+}
+
+type RoleSource = Meta & { editable?: boolean; roles: RoleListItem[] }
+
 type RolesResp = {
   platform: string
-  sources: (Meta & { roles: { name: string; file: string; path: string }[] })[]
+  sources: RoleSource[]
+  builtin?: { name: string }[]
+}
+
+type RoleBody = {
+  name: string
+  display_name: string
+  description: string
+  body: string
+  extra: Record<string, unknown>
+}
+
+type RoleGetResp = {
+  scope: string
+  path: string
+  platform: string
+  exists: boolean
+  role: RoleBody
+  error?: string
+}
+
+type RoleWriteResp = {
+  scope: string
+  path: string
+  platform: string
+  written?: boolean
+  deleted?: boolean
+  role?: RoleBody
+  sources?: RoleSource[]
+  error?: string
 }
 
 type Tab = 'status' | 'config' | 'panels' | 'roles'
@@ -97,8 +161,24 @@ const TABS: { id: Tab; label: string; icon: typeof Box }[] = [
   { id: 'roles', label: 'Roles', icon: UserSquare },
 ]
 
-const SAFETY_MODES = ['read_only', 'propose', 'write', 'yolo'] as const
-const PERSISTENCE = ['ephemeral', 'job'] as const
+// Fallback option sets, used ONLY when /rutherford-meta could not be fetched.
+// The live values come from meta; these keep the dropdowns populated (never
+// crash, never empty) if the meta fetch fails.
+const FALLBACK_SAFETY_MODES = ['read_only', 'propose', 'write', 'yolo']
+const FALLBACK_PERSISTENCE = ['ephemeral', 'job']
+const FALLBACK_STRATEGIES = [
+  'all-voices', 'unanimous', 'majority', 'plurality', 'weighted', 'parity-pair', 'rank',
+]
+
+// True when meta's agent_ids_source signals the roster was NOT authoritatively
+// resolved (built-in + config fallback, no live doctor probe) — so the UI must
+// offer a free-text datalist combobox rather than a closed <select>, letting the
+// user type an id the backend could not enumerate.
+function agentIdsAreFallback(meta: MetaResp | null): boolean {
+  const src = String(meta?.agent_ids_source || '').toLowerCase()
+  if (!src) return true // no meta at all → always allow free text
+  return /fallback|no backend mcp|config-derived|unresolved|builtin/.test(src)
+}
 
 function PathChip({ meta }: { meta: Meta }) {
   return (
@@ -121,6 +201,7 @@ export default function Rutherford() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
+  const [meta, setMeta] = useState<MetaResp | null>(null)
   const [status, setStatus] = useState<StatusResp | null>(null)
   const [configScope, setConfigScope] = useState<'global' | 'workspace'>('global')
   const [config, setConfig] = useState<ConfigResp | null>(null)
@@ -168,17 +249,26 @@ export default function Rutherford() {
     [api],
   )
 
-  // loadAll no longer fetches /rutherford-config and no longer depends on configScope, so
-  // toggling scope does NOT re-run this batch. Config is fetched separately.
+  // loadAll fetches everything EXCEPT /rutherford-config (owned by fetchConfig so a scope
+  // toggle never re-fires this batch). Meta is fetched here too — once — and
+  // degrades to free-text inputs on failure (never throws the whole batch: it is
+  // awaited defensively so a meta 500 doesn't blank status/panels/roles).
   const loadAll = useCallback(async () => {
     setLoading(true)
     setErr(null)
     try {
-      const [s, p, r] = await Promise.all([
+      const [m, s, p, r] = await Promise.all([
+        // Meta is best-effort: catch so a meta failure degrades dropdowns to
+        // free text but never fails the whole load.
+        api.get(`${BASE}/rutherford-meta`).catch(() => null),
         api.get(`${BASE}/status`),
         api.get(`${BASE}/panels`),
-        api.get(`${BASE}/roles`),
+        // FIX: roles are served at /rutherford-roles (GET+PUT share that base);
+        // the old bare /roles path 404s.
+        api.get(`${BASE}/rutherford-roles`),
       ])
+      if (m && typeof m === 'object' && !(m as MetaResp).error) setMeta(m as MetaResp)
+      else setMeta(null)
       setStatus(s as StatusResp)
       setPanels(p as PanelsResp)
       setRoles(r as RolesResp)
@@ -189,9 +279,9 @@ export default function Rutherford() {
     }
   }, [api])
 
-  // Initial + manual full reload (status/panels/roles) plus a config fetch for
-  // the current scope. configScope is intentionally NOT a dep of loadAll; the
-  // config fetch below re-runs on its own when configScope changes.
+  // Initial + manual full reload (meta/status/panels/roles) plus a config fetch
+  // for the current scope. configScope is intentionally NOT a dep of loadAll;
+  // the config fetch below re-runs on its own when configScope changes.
   useEffect(() => { void loadAll() }, [loadAll])
   useEffect(() => { void fetchConfig(configScope) }, [fetchConfig, configScope])
 
@@ -317,9 +407,94 @@ export default function Rutherford() {
     [api],
   )
 
+  // Read one role's full body (for the edit form). Returns null on a miss.
+  const fetchRole = useCallback(
+    async (scope: 'global' | 'workspace', name: string): Promise<RoleBody | null> => {
+      try {
+        const got = (await api.get(
+          `${BASE}/rutherford-roles?scope=${scope}&name=${encodeURIComponent(name)}`,
+        )) as RoleGetResp | null
+        if (got && typeof got === 'object' && got.role && typeof got.role === 'object') {
+          return got.role
+        }
+        return null
+      } catch {
+        return null
+      }
+    },
+    [api],
+  )
+
+  // Create/overwrite OR delete a role file. SAME confirmed-persistence discipline
+  // as config/panels: require written===true, retry once after 600ms through a
+  // transient 403, then fall back to a verify GET (the listing for create/edit;
+  // the single-role 404 for delete). On failure we throw so the caller keeps the
+  // user's edits and never reports a phantom success.
+  const saveRole = useCallback(
+    async (
+      scope: 'global' | 'workspace',
+      payload: { name: string; op?: 'delete' } & Partial<RoleBody>,
+    ): Promise<RoleWriteResp> => {
+      const url = `${BASE}/rutherford-roles?scope=${scope}`
+      const wrote = (v: unknown): v is RoleWriteResp =>
+        !!v && typeof v === 'object' && (v as RoleWriteResp).written === true
+      const isDelete = payload.op === 'delete'
+
+      let resp: unknown = await api.put(url, payload)
+      if (!wrote(resp)) {
+        await new Promise((r) => setTimeout(r, 600))
+        resp = await api.put(url, payload)
+      }
+
+      let confirmed: RoleWriteResp | null = wrote(resp) ? (resp as RoleWriteResp) : null
+      if (!confirmed) {
+        if (isDelete) {
+          // Verify the single-role GET now 404s (deleted).
+          try {
+            const got = (await api.get(
+              `${BASE}/rutherford-roles?scope=${scope}&name=${encodeURIComponent(payload.name)}`,
+            )) as RoleGetResp | null
+            if (!got || (got as RoleGetResp).exists === false) {
+              confirmed = { scope, path: '', platform: '', written: true, deleted: true }
+            }
+          } catch {
+            // A thrown 404 also proves deletion.
+            confirmed = { scope, path: '', platform: '', written: true, deleted: true }
+          }
+        } else {
+          // Verify the role now appears in the scope's listing.
+          const listing = (await api.get(`${BASE}/rutherford-roles`)) as RolesResp | null
+          const src = (Array.isArray(listing?.sources) ? listing!.sources : []).find(
+            (s) => s.scope === scope,
+          )
+          const found = (Array.isArray(src?.roles) ? src!.roles : []).some(
+            (r) => r.name === payload.name,
+          )
+          if (found) confirmed = { scope, path: src?.path ?? '', platform: '', written: true }
+        }
+      }
+
+      if (!confirmed) {
+        throw new Error(
+          'Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your edits were kept; try Save again.',
+        )
+      }
+
+      // Refresh the listing so the Roles tab reflects the change in both scopes.
+      try {
+        const fresh = (await api.get(`${BASE}/rutherford-roles`)) as RolesResp | null
+        if (fresh && typeof fresh === 'object') setRoles(fresh)
+      } catch {
+        /* non-fatal — the write already confirmed */
+      }
+      return confirmed
+    },
+    [api],
+  )
+
   return (
     <>
-      <PageHeader title="Rutherford" subtitle="Config & status — config.toml editing (Phase 2)" />
+      <PageHeader title="Rutherford" subtitle="Config, panels & roles — config.toml / panels.toon / role files" />
       <div className="px-6 pb-8 overflow-y-auto flex-1 min-h-0">
         <div className="flex gap-1 mb-5 border-b border-[var(--border,#2a2a2a)]">
           {TABS.map(({ id, label, icon: Icon }) => (
@@ -360,13 +535,16 @@ export default function Rutherford() {
             {tab === 'config' && (
               <ConfigView
                 config={config}
+                meta={meta}
                 scope={configScope}
                 onScope={reloadConfig}
                 onSave={saveConfig}
               />
             )}
-            {tab === 'panels' && <PanelsView panels={panels} onSave={savePanels} />}
-            {tab === 'roles' && <RolesView roles={roles} />}
+            {tab === 'panels' && <PanelsView panels={panels} meta={meta} onSave={savePanels} />}
+            {tab === 'roles' && (
+              <RolesView roles={roles} meta={meta} onFetchRole={fetchRole} onSave={saveRole} />
+            )}
           </>
         )}
       </div>
@@ -501,27 +679,59 @@ function StatusView({ status }: { status: StatusResp | null }) {
 
 // ---- editable primitives -------------------------------------------------
 
-// A labelled form control. `label` is the human-readable title; `hint` is the
-// raw config key shown small + muted so the mapping stays unambiguous; `desc`
-// is an optional one-line explanation. Presentational only.
+// A small "?" help affordance: a hoverable/tappable info dot whose tooltip is the
+// native title (works everywhere, no portal). Presentational only.
+function HelpDot({ text }: { text: string }) {
+  if (!text) return null
+  return (
+    <span
+      className="inline-flex items-center justify-center align-middle ml-1 text-muted opacity-60 hover:opacity-100 cursor-help"
+      title={text}
+      aria-label={text}
+      role="img"
+    >
+      <Info size={12} />
+    </span>
+  )
+}
+
+// A required/optional marker. required → amber "*"; optional → muted "optional".
+function ReqMark({ required }: { required: boolean }) {
+  return required ? (
+    <span className="text-amber-500 ml-1" title="Required">*</span>
+  ) : (
+    <span className="text-[10px] text-muted opacity-60 ml-1.5">optional</span>
+  )
+}
+
+// A labelled form control driven by a field descriptor. `label` is the
+// human-readable title; `hint` is the raw config key shown small + muted so the
+// mapping stays unambiguous; `help` is the tooltip; `required` renders the
+// marker; `absent` is the "what an absent value means" note rendered muted below.
 function Field({
   label,
   hint,
-  desc,
+  help,
+  required,
+  absent,
   children,
 }: {
   label: string
   hint?: string
-  desc?: string
+  help?: string
+  required?: boolean
+  absent?: string
   children: React.ReactNode
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-sm text-[var(--fg,#eee)]">
+      <span className="text-sm text-[var(--fg,#eee)] flex items-center flex-wrap">
         {label}
         {hint && <code className="ml-1.5 text-[10px] text-muted opacity-70">{hint}</code>}
+        {help && <HelpDot text={help} />}
+        {required !== undefined && <ReqMark required={required} />}
       </span>
-      {desc && <span className="text-[11px] text-muted -mt-0.5">{desc}</span>}
+      {absent && <span className="text-[11px] text-muted -mt-0.5">absent → {absent}</span>}
       {children}
     </label>
   )
@@ -533,24 +743,30 @@ const inputCls =
 function StringList({
   label,
   hint,
-  desc,
+  help,
+  required,
+  absent,
   values,
   onChange,
 }: {
   label: string
   hint?: string
-  desc?: string
+  help?: string
+  required?: boolean
+  absent?: string
   values: string[]
   onChange: (v: string[]) => void
 }) {
   const [draft, setDraft] = useState('')
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-sm text-[var(--fg,#eee)]">
+      <span className="text-sm text-[var(--fg,#eee)] flex items-center flex-wrap">
         {label}
         {hint && <code className="ml-1.5 text-[10px] text-muted opacity-70">{hint}</code>}
+        {help && <HelpDot text={help} />}
+        {required !== undefined && <ReqMark required={required} />}
       </span>
-      {desc && <span className="text-[11px] text-muted -mt-0.5">{desc}</span>}
+      {absent && <span className="text-[11px] text-muted -mt-0.5">empty → {absent}</span>}
       <div className="flex flex-col gap-1.5">
         {values.map((v, i) => (
           <div key={i} className="flex items-center gap-1.5">
@@ -660,17 +876,19 @@ function Switch({
 }
 
 // A labelled switch row: the Switch plus its human label / config-key hint /
-// description. Used for the Defaults toggles.
+// help / absent-meaning. Used for the Defaults toggles.
 function Toggle({
   label,
   hint,
-  desc,
+  help,
+  absent,
   value,
   onChange,
 }: {
   label: string
   hint?: string
-  desc?: string
+  help?: string
+  absent?: string
   value: boolean
   onChange: (v: boolean) => void
 }) {
@@ -680,14 +898,115 @@ function Toggle({
         <Switch value={value} onChange={onChange} srLabel={label || undefined} />
       </span>
       <span className="flex flex-col">
-        <span className="text-sm text-[var(--fg,#eee)]">
+        <span className="text-sm text-[var(--fg,#eee)] flex items-center flex-wrap">
           {label}
           {hint && <code className="ml-1.5 text-[10px] text-muted opacity-70">{hint}</code>}
+          {help && <HelpDot text={help} />}
         </span>
-        {desc && <span className="text-[11px] text-muted">{desc}</span>}
+        {absent && <span className="text-[11px] text-muted">absent → {absent}</span>}
       </span>
     </label>
   )
+}
+
+// ---- Centralized Config field descriptors --------------------------------
+//
+// ONE source of truth for every Config field's label, raw config key (hint),
+// help text, required|optional status, and absent-meaning. Every Config control
+// reads its metadata from here so the help affordance / required marker /
+// absent-meaning wording stays consistent and is defined in exactly one place.
+// The verbatim absent-meaning wording is the reviewer-specified copy.
+type FieldKey =
+  | 'default_safety_mode'
+  | 'default_persistence'
+  | 'default_timeout_s'
+  | 'max_targets'
+  | 'auto_detect_local_models'
+  | 'synthesize_default'
+  | 'enabled_agents'
+  | 'trusted_workspaces'
+  | 'role_dirs'
+  | 'agent_override'
+
+type FieldDesc = {
+  label: string
+  key: string // raw config key hint
+  help: string
+  required: boolean
+  absent: string // what an absent/empty value means
+}
+
+const CONFIG_FIELDS: Record<FieldKey, FieldDesc> = {
+  default_safety_mode: {
+    label: 'Default safety mode',
+    key: 'default_safety_mode',
+    help: 'The safety posture applied to a delegation when the call does not name one. read_only reads only; propose stages a diff; write edits in a sandbox; yolo edits with no sandbox.',
+    required: false,
+    absent: 'defaults to read_only',
+  },
+  default_persistence: {
+    label: 'Run persistence',
+    key: 'default_persistence',
+    help: 'Whether a run is kept as a durable job on disk (job) or discarded after it returns (ephemeral), when the call does not specify.',
+    required: false,
+    absent: 'defaults to ephemeral',
+  },
+  default_timeout_s: {
+    label: 'Default timeout (seconds)',
+    key: 'default_timeout_s',
+    help: 'Per-voice / per-delegation wall-clock timeout applied when a call does not pass its own timeout_s.',
+    required: false,
+    absent: 'uses the built-in default',
+  },
+  max_targets: {
+    label: 'Max agents per panel',
+    key: 'max_targets',
+    help: 'Upper bound on how many agents an auto-expanded (all) panel fans out to.',
+    required: false,
+    absent: 'uses the built-in default',
+  },
+  auto_detect_local_models: {
+    label: 'Auto-detect local models (Ollama / LM Studio)',
+    key: 'auto_detect_local_models',
+    help: 'When on, Rutherford probes a local Ollama / LM Studio and offers detected models as free voices.',
+    required: false,
+    absent: 'defaults to off',
+  },
+  synthesize_default: {
+    label: 'Synthesize a combined answer by default',
+    key: 'synthesize_default',
+    help: 'When on, an all-voices consensus adds a server-side combined answer unless the call overrides it.',
+    required: false,
+    absent: 'defaults to off',
+  },
+  enabled_agents: {
+    label: 'Enabled agents (allowlist)',
+    key: 'enabled_agents',
+    help: 'An explicit allowlist of agent ids Rutherford may drive. When set, only these are enabled.',
+    required: false,
+    absent: 'All built-in + configured agents are enabled',
+  },
+  trusted_workspaces: {
+    label: 'Trusted workspaces (write/yolo allowed)',
+    key: 'trusted_workspaces',
+    help: 'Absolute directories where write & yolo delegations are permitted. A path not on this list can only be read.',
+    required: false,
+    absent: 'write/yolo not permitted anywhere',
+  },
+  role_dirs: {
+    label: 'Custom role directories',
+    key: 'role_dirs',
+    help: 'Extra folders scanned for role persona files, in addition to the default ~/.rutherford/roles and <project>/.rutherford/roles.',
+    required: false,
+    absent: 'only ~/.rutherford/roles and <project>/.rutherford/roles scanned',
+  },
+  agent_override: {
+    label: 'Default model',
+    key: '[agents.<id>].default_model',
+    help: 'A per-agent default model id used when a call to that agent does not name a model. Free text — model ids are open.',
+    required: false,
+    absent: "uses the agent's built-in default model",
+  },
 }
 
 // ---- Config tab (editable) ----------------------------------------------
@@ -821,13 +1140,66 @@ function toBody(config: ConfigResp, d: Draft): Record<string, unknown> {
   return body
 }
 
+// A <select> driven by meta, OR — when the options come from an unresolved
+// fallback (agentIdsAreFallback) — a free-text <input> backed by a <datalist> so
+// the user can still type an id the backend could not enumerate. `options` is
+// always guarded to [] by the caller.
+function ComboSelect({
+  value,
+  options,
+  freeText,
+  onChange,
+  listId,
+  placeholder,
+}: {
+  value: string
+  options: string[]
+  freeText: boolean
+  onChange: (v: string) => void
+  listId: string
+  placeholder?: string
+}) {
+  const opts = Array.isArray(options) ? options : []
+  if (freeText) {
+    return (
+      <>
+        <input
+          className={inputCls}
+          value={value}
+          list={listId}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <datalist id={listId}>
+          {opts.map((o) => (
+            <option key={o} value={o} />
+          ))}
+        </datalist>
+      </>
+    )
+  }
+  return (
+    <select className={inputCls} value={value} onChange={(e) => onChange(e.target.value)}>
+      {/* Ensure the current value is always selectable even if not in options. */}
+      {value !== '' && !opts.includes(value) && <option value={value}>{value}</option>}
+      {opts.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 function ConfigView({
   config,
+  meta,
   scope,
   onScope,
   onSave,
 }: {
   config: ConfigResp | null
+  meta: MetaResp | null
   scope: 'global' | 'workspace'
   onScope: (s: 'global' | 'workspace') => void
   onSave: (s: 'global' | 'workspace', body: Record<string, unknown>) => Promise<ConfigResp>
@@ -835,6 +1207,14 @@ function ConfigView({
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  // Option sets from meta, guarded to the fallback constants when meta is absent.
+  const safetyModes = Array.isArray(meta?.safety_modes) && meta!.safety_modes.length
+    ? meta!.safety_modes : FALLBACK_SAFETY_MODES
+  const persistence = Array.isArray(meta?.persistence) && meta!.persistence.length
+    ? meta!.persistence : FALLBACK_PERSISTENCE
+  const agentIds = Array.isArray(meta?.agent_ids) ? meta!.agent_ids : []
+  const agentFreeText = agentIdsAreFallback(meta)
 
   // Render guard: the loaded config must match the selected scope. Until the
   // scope-matched fetch lands, `config` may still hold the previous scope's
@@ -871,6 +1251,8 @@ function ConfigView({
     }
   }
 
+  const F = CONFIG_FIELDS
+
   return (
     <>
       <div className="flex items-center gap-1 mb-4">
@@ -897,6 +1279,13 @@ function ConfigView({
         </button>
       </div>
 
+      {!meta && (
+        <div className="flex items-center gap-2 text-xs text-muted mb-3">
+          <AlertTriangle size={13} /> Option lists (dropdowns) could not be loaded from the
+          backend — showing free-text inputs instead.
+        </div>
+      )}
+
       {saveMsg && (
         <div
           className={
@@ -918,28 +1307,37 @@ function ConfigView({
             <PathChip meta={config} />
             {!config.exists && (
               <p className="text-xs text-muted mt-2">
-                No file at this scope yet — saving creates <code>{config.path}</code>.
+                No <code>config.toml</code> at this scope yet — no file yet; defaults apply; saving
+                creates it (<code>{config.path}</code>).
               </p>
             )}
-            <div className="grid gap-3.5 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] mt-3">
+            <div className="grid gap-3.5 grid-cols-[repeat(auto-fit,minmax(200px,1fr))] mt-3">
               <Field
-                label="Default safety mode"
-                hint="default_safety_mode"
-                desc="read_only · propose · write · yolo"
+                label={F.default_safety_mode.label}
+                hint={F.default_safety_mode.key}
+                help={F.default_safety_mode.help}
+                required={F.default_safety_mode.required}
+                absent={F.default_safety_mode.absent}
               >
                 <select
                   className={inputCls}
                   value={draft.default_safety_mode}
                   onChange={(e) => patch({ default_safety_mode: e.target.value })}
                 >
-                  {SAFETY_MODES.map((m) => (
+                  {safetyModes.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
                   ))}
                 </select>
               </Field>
-              <Field label="Default timeout (seconds)" hint="default_timeout_s">
+              <Field
+                label={F.default_timeout_s.label}
+                hint={F.default_timeout_s.key}
+                help={F.default_timeout_s.help}
+                required={F.default_timeout_s.required}
+                absent={F.default_timeout_s.absent}
+              >
                 <input
                   type="number"
                   className={inputCls}
@@ -947,7 +1345,13 @@ function ConfigView({
                   onChange={(e) => patch({ default_timeout_s: e.target.value })}
                 />
               </Field>
-              <Field label="Max agents per panel" hint="max_targets">
+              <Field
+                label={F.max_targets.label}
+                hint={F.max_targets.key}
+                help={F.max_targets.help}
+                required={F.max_targets.required}
+                absent={F.max_targets.absent}
+              >
                 <input
                   type="number"
                   className={inputCls}
@@ -956,16 +1360,18 @@ function ConfigView({
                 />
               </Field>
               <Field
-                label="Run persistence"
-                hint="default_persistence"
-                desc="ephemeral · job"
+                label={F.default_persistence.label}
+                hint={F.default_persistence.key}
+                help={F.default_persistence.help}
+                required={F.default_persistence.required}
+                absent={F.default_persistence.absent}
               >
                 <select
                   className={inputCls}
                   value={draft.default_persistence}
                   onChange={(e) => patch({ default_persistence: e.target.value })}
                 >
-                  {PERSISTENCE.map((m) => (
+                  {persistence.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
@@ -975,14 +1381,18 @@ function ConfigView({
             </div>
             <div className="flex flex-wrap gap-6 mt-4">
               <Toggle
-                label="Auto-detect local models (Ollama / LM Studio)"
-                hint="auto_detect_local_models"
+                label={F.auto_detect_local_models.label}
+                hint={F.auto_detect_local_models.key}
+                help={F.auto_detect_local_models.help}
+                absent={F.auto_detect_local_models.absent}
                 value={draft.auto_detect_local_models}
                 onChange={(v) => patch({ auto_detect_local_models: v })}
               />
               <Toggle
-                label="Synthesize a combined answer by default"
-                hint="synthesize_default"
+                label={F.synthesize_default.label}
+                hint={F.synthesize_default.key}
+                help={F.synthesize_default.help}
+                absent={F.synthesize_default.absent}
                 value={draft.synthesize_default}
                 onChange={(v) => patch({ synthesize_default: v })}
               />
@@ -995,23 +1405,29 @@ function ConfigView({
             <CardTitle>Allowlists &amp; directories</CardTitle>
             <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(240px,1fr))] mt-3">
               <StringList
-                label="Enabled agents (allowlist)"
-                hint="enabled_agents"
-                desc="Empty = every configured agent is enabled."
+                label={F.enabled_agents.label}
+                hint={F.enabled_agents.key}
+                help={F.enabled_agents.help}
+                required={F.enabled_agents.required}
+                absent={F.enabled_agents.absent}
                 values={draft.enabled_agents}
                 onChange={(v) => patch({ enabled_agents: v })}
               />
               <StringList
-                label="Trusted workspaces (write/yolo allowed)"
-                hint="trusted_workspaces"
-                desc="Paths where write & yolo delegations may run."
+                label={F.trusted_workspaces.label}
+                hint={F.trusted_workspaces.key}
+                help={F.trusted_workspaces.help}
+                required={F.trusted_workspaces.required}
+                absent={F.trusted_workspaces.absent}
                 values={draft.trusted_workspaces}
                 onChange={(v) => patch({ trusted_workspaces: v })}
               />
               <StringList
-                label="Custom role directories"
-                hint="role_dirs"
-                desc="Extra folders scanned for role persona files."
+                label={F.role_dirs.label}
+                hint={F.role_dirs.key}
+                help={F.role_dirs.help}
+                required={F.role_dirs.required}
+                absent={F.role_dirs.absent}
                 values={draft.role_dirs}
                 onChange={(v) => patch({ role_dirs: v })}
               />
@@ -1022,15 +1438,17 @@ function ConfigView({
 
           <Card>
             <CardTitle>Per-agent overrides</CardTitle>
-            <p className="text-[11px] text-muted mt-1">
-              <code className="text-[10px] opacity-70">[agents.*]</code> — per-agent
-              default model and enabled flag.
+            <p className="text-[11px] text-muted mt-1 flex items-center flex-wrap">
+              <code className="text-[10px] opacity-70">[agents.*]</code>
+              <span className="ml-1.5">per-agent default model and enabled flag.</span>
+              <HelpDot text={F.agent_override.help} />
+              <span className="ml-1.5">absent → {F.agent_override.absent}</span>
             </p>
             <div className="mt-3 flex flex-col gap-2">
               {draft.agents.length > 0 && (
                 <div className="flex items-center gap-2 px-2 text-[10px] uppercase tracking-wide text-muted opacity-70">
-                  <span className="w-32">Agent</span>
-                  <span className="flex-1">Default model</span>
+                  <span className="w-40">Agent (id)</span>
+                  <span className="flex-1">Default model (free text)</span>
                   <span>Enabled</span>
                   <span className="w-6" />
                 </div>
@@ -1040,16 +1458,20 @@ function ConfigView({
                   key={i}
                   className="flex items-center gap-2 p-2 rounded bg-[var(--surface-2,#1e1e1e)]"
                 >
-                  <input
-                    className={inputCls + ' w-32'}
-                    value={a.id}
-                    placeholder="agent id"
-                    onChange={(e) => {
-                      const next = draft.agents.slice()
-                      next[i] = { ...a, id: e.target.value }
-                      patch({ agents: next })
-                    }}
-                  />
+                  <div className="w-40">
+                    <ComboSelect
+                      value={a.id}
+                      options={agentIds}
+                      freeText={agentFreeText}
+                      listId={`agent-ids-${i}`}
+                      placeholder="agent id"
+                      onChange={(v) => {
+                        const next = draft.agents.slice()
+                        next[i] = { ...a, id: v }
+                        patch({ agents: next })
+                      }}
+                    />
+                  </div>
                   <input
                     className={inputCls + ' flex-1'}
                     value={a.default_model ?? ''}
@@ -1099,23 +1521,13 @@ function ConfigView({
   )
 }
 
-const STRATEGIES = [
-  'all-voices',
-  'unanimous',
-  'majority',
-  'plurality',
-  'weighted',
-  'parity-pair',
-  'rank',
-] as const
-
 // Seat keys we surface as first-class editable fields. Any OTHER key present on
 // a seat (an unknown/future key) is carried through untouched on save — never
-// dropped — because the editor deep-clones the whole seat object.
-const SEAT_FIELDS: { key: keyof PanelSeat; label: string; placeholder: string }[] = [
-  { key: 'cli', label: 'cli', placeholder: 'agent id (required)' },
-  { key: 'model', label: 'model', placeholder: 'agent default' },
-  { key: 'role', label: 'role', placeholder: 'persona id' },
+// dropped — because the editor deep-clones the whole seat object. `cli` and
+// `role` are rendered specially (meta-driven dropdowns) so they are excluded
+// from this generic text-field list.
+const SEAT_TEXT_FIELDS: { key: keyof PanelSeat; label: string; placeholder: string }[] = [
+  { key: 'model', label: 'model', placeholder: 'agent default (free text)' },
   { key: 'label', label: 'label', placeholder: 'result key' },
   { key: 'stance', label: 'stance', placeholder: 'for / against / neutral' },
 ]
@@ -1168,27 +1580,79 @@ function panelsToBody(drafts: PanelRec[]): PanelRec[] {
 
 function SeatEditor({
   seat,
+  meta,
+  index,
   onChange,
   onRemove,
 }: {
   seat: PanelSeat
+  meta: MetaResp | null
+  index: number
   onChange: (s: PanelSeat) => void
   onRemove: () => void
 }) {
   const set = (k: keyof PanelSeat, v: string) => onChange({ ...seat, [k]: v })
+  const agentIds = Array.isArray(meta?.agent_ids) ? meta!.agent_ids : []
+  const agentFreeText = agentIdsAreFallback(meta)
+  const roleIds = Array.isArray(meta?.roles) ? meta!.roles : []
   // Unknown keys (anything not a surfaced field) — shown read-only so the user
   // knows they're preserved on save.
-  const surfaced = new Set<string>([...SEAT_FIELDS.map((f) => f.key as string), 'weight', 'parity'])
+  const surfaced = new Set<string>([
+    'cli', 'role', ...SEAT_TEXT_FIELDS.map((f) => f.key as string), 'weight', 'parity',
+  ])
   const unknownKeys = Object.keys(seat).filter((k) => !surfaced.has(k))
   return (
     <div className="p-2.5 rounded bg-[var(--surface-3,#232323)] border border-[var(--border,#2a2a2a)]">
       <div className="grid gap-2 grid-cols-[repeat(auto-fit,minmax(140px,1fr))]">
-        {SEAT_FIELDS.map((f) => (
+        {/* cli — meta-driven agent-id dropdown (or datalist combobox on fallback) */}
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">
+            cli<span className="text-amber-500"> *</span>
+          </span>
+          <ComboSelect
+            value={seat.cli != null ? String(seat.cli) : ''}
+            options={agentIds}
+            freeText={agentFreeText}
+            listId={`seat-cli-${index}`}
+            placeholder="agent id (required)"
+            onChange={(v) => set('cli', v)}
+          />
+        </label>
+        {/* model — free text (model ids are open) */}
+        {SEAT_TEXT_FIELDS.filter((f) => f.key === 'model').map((f) => (
           <label key={f.key as string} className="flex flex-col gap-0.5">
-            <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">
-              {f.label}
-              {f.key === 'cli' && <span className="text-amber-500"> *</span>}
-            </span>
+            <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">{f.label}</span>
+            <input
+              className={inputCls}
+              value={seat[f.key] != null ? String(seat[f.key]) : ''}
+              placeholder={f.placeholder}
+              onChange={(e) => set(f.key, e.target.value)}
+            />
+          </label>
+        ))}
+        {/* role — meta-driven role dropdown; free-text option kept selectable */}
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">role</span>
+          <select
+            className={inputCls}
+            value={seat.role != null ? String(seat.role) : ''}
+            onChange={(e) => set('role', e.target.value)}
+          >
+            <option value="">(none)</option>
+            {seat.role && !roleIds.includes(String(seat.role)) && (
+              <option value={String(seat.role)}>{String(seat.role)}</option>
+            )}
+            {roleIds.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </label>
+        {/* label + stance — free text */}
+        {SEAT_TEXT_FIELDS.filter((f) => f.key !== 'model').map((f) => (
+          <label key={f.key as string} className="flex flex-col gap-0.5">
+            <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">{f.label}</span>
             <input
               className={inputCls}
               value={seat[f.key] != null ? String(seat[f.key]) : ''}
@@ -1252,19 +1716,23 @@ function SeatEditor({
 
 function PanelEditor({
   panel,
+  meta,
   onChange,
   onDelete,
 }: {
   panel: PanelRec
+  meta: MetaResp | null
   onChange: (p: PanelRec) => void
   onDelete: () => void
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const seats = Array.isArray(panel.seats) ? panel.seats : []
+  const strategies = Array.isArray(meta?.strategies) && meta!.strategies.length
+    ? meta!.strategies : FALLBACK_STRATEGIES
   return (
     <div className="p-3 rounded bg-[var(--surface-2,#1e1e1e)] border border-[var(--border,#2a2a2a)]">
       <div className="grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
-        <Field label="Name" hint="panel key">
+        <Field label="Name" hint="panel key" required>
           <input
             className={inputCls}
             value={panel.name}
@@ -1272,13 +1740,21 @@ function PanelEditor({
             onChange={(e) => onChange({ ...panel, name: e.target.value })}
           />
         </Field>
-        <Field label="Strategy" hint="strategy">
+        <Field
+          label="Strategy"
+          hint="strategy"
+          help="How the panel's voices are reduced to an outcome. all-voices returns every voice; the rest collapse to one verdict (unanimous, majority, plurality, weighted, parity-pair, rank)."
+        >
           <select
             className={inputCls}
             value={panel.strategy || 'all-voices'}
             onChange={(e) => onChange({ ...panel, strategy: e.target.value })}
           >
-            {STRATEGIES.map((s) => (
+            {/* Keep an unknown loaded strategy selectable. */}
+            {panel.strategy && !strategies.includes(panel.strategy) && (
+              <option value={panel.strategy}>{panel.strategy}</option>
+            )}
+            {strategies.map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
@@ -1308,6 +1784,8 @@ function PanelEditor({
             <SeatEditor
               key={i}
               seat={s}
+              meta={meta}
+              index={i}
               onChange={(ns) => {
                 const next = seats.slice()
                 next[i] = ns
@@ -1354,9 +1832,11 @@ function PanelEditor({
 
 function PanelsView({
   panels,
+  meta,
   onSave,
 }: {
   panels: PanelsResp | null
+  meta: MetaResp | null
   onSave: (scope: 'global' | 'workspace', body: PanelRec[]) => Promise<PanelsWriteResp>
 }) {
   const [scope, setScope] = useState<'global' | 'workspace'>('global')
@@ -1480,6 +1960,7 @@ function PanelsView({
               <PanelEditor
                 key={i}
                 panel={p}
+                meta={meta}
                 onChange={(np) => patchPanel(i, np)}
                 onDelete={() => setDrafts((d) => (d ? d.filter((_, j) => j !== i) : d))}
               />
@@ -1497,37 +1978,394 @@ function PanelsView({
   )
 }
 
-function RolesView({ roles }: { roles: RolesResp | null }) {
-  if (!roles) return <p className="text-sm text-muted">No roles.</p>
-  const sources = Array.isArray(roles.sources) ? roles.sources : []
-  const total = sources.reduce((n, s) => n + (Array.isArray(s.roles) ? s.roles.length : 0), 0)
-  if (total === 0) {
-    return (
-      <Card>
-        <CardTitle>Roles</CardTitle>
-        <p className="text-sm text-muted mt-1">
-          No role markdown files found (read-only — editing is a later step). Checked:
-        </p>
-        {sources.map((s) => (
-          <PathChip key={s.path} meta={s} />
-        ))}
-      </Card>
-    )
+// ---- Roles tab (editable, parity with Panels) ----------------------------
+
+type RoleDraft = RoleBody & { _new?: boolean }
+
+function emptyRoleDraft(): RoleDraft {
+  return { name: '', display_name: '', description: '', body: '', extra: {}, _new: true }
+}
+
+function RolesView({
+  roles,
+  meta,
+  onFetchRole,
+  onSave,
+}: {
+  roles: RolesResp | null
+  meta: MetaResp | null
+  onFetchRole: (scope: 'global' | 'workspace', name: string) => Promise<RoleBody | null>
+  onSave: (
+    scope: 'global' | 'workspace',
+    payload: { name: string; op?: 'delete' } & Partial<RoleBody>,
+  ) => Promise<RoleWriteResp>
+}) {
+  const [scope, setScope] = useState<'global' | 'workspace'>('global')
+  const [draft, setDraft] = useState<RoleDraft | null>(null)
+  const [origName, setOrigName] = useState<string | null>(null) // the file being edited (rename guard)
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [opening, setOpening] = useState<string | null>(null)
+
+  const sources = Array.isArray(roles?.sources) ? roles!.sources : []
+  // Only the two writable scopes are editable; config:role_dirs is reference.
+  const editableSource = sources.find((s) => s.scope === scope && s.editable !== false) || null
+  const editableRoles = Array.isArray(editableSource?.roles) ? editableSource!.roles : []
+
+  // Built-in personas, read-only reference. Prefer meta.roles_builtin; fall back
+  // to the roles.builtin listing shape.
+  const builtinRoles = Array.isArray(meta?.roles_builtin) && meta!.roles_builtin.length
+    ? meta!.roles_builtin
+    : (Array.isArray(roles?.builtin) ? roles!.builtin.map((b) => b.name) : [])
+
+  // Reference (non-editable) role_dirs sources, shown read-only like built-ins.
+  const referenceSources = sources.filter((s) => s.editable === false)
+
+  const openRole = async (name: string) => {
+    setOpening(name)
+    setSaveMsg(null)
+    setConfirmDelete(false)
+    const body = await onFetchRole(scope, name)
+    setOpening(null)
+    if (!body) {
+      setSaveMsg({ ok: false, text: `Could not open role “${name}”.` })
+      return
+    }
+    setDraft({ ...body, extra: body.extra || {} })
+    setOrigName(name)
   }
+
+  const startNew = () => {
+    setSaveMsg(null)
+    setConfirmDelete(false)
+    setDraft(emptyRoleDraft())
+    setOrigName(null)
+  }
+
+  const closeEditor = () => {
+    setDraft(null)
+    setOrigName(null)
+    setConfirmDelete(false)
+  }
+
+  const validation = (): string | null => {
+    if (!draft) return null
+    const n = draft.name.trim()
+    if (!n) return 'Role name is required.'
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(n))
+      return 'Role name must be a kebab-case id (letters, digits, . _ -), no path separators.'
+    if (builtinRoles.includes(n))
+      return `“${n}” is a built-in role (read-only reference). Choose a different id.`
+    return null
+  }
+
+  const handleSave = async () => {
+    if (!draft) return
+    const verr = validation()
+    if (verr) {
+      setSaveMsg({ ok: false, text: verr })
+      return
+    }
+    setSaving(true)
+    setSaveMsg(null)
+    try {
+      const newName = draft.name.trim()
+      await onSave(scope, {
+        name: newName,
+        display_name: draft.display_name || '',
+        description: draft.description || '',
+        body: draft.body || '',
+        extra: draft.extra || {},
+      })
+      // Rename: the file id changed on an existing role → delete the old file so
+      // we don't leave an orphan. Best-effort; the new file already persisted.
+      if (origName && origName !== newName) {
+        try {
+          await onSave(scope, { name: origName, op: 'delete' })
+        } catch {
+          /* non-fatal — new role saved; old file left in place */
+        }
+      }
+      setSaveMsg({ ok: true, text: `Saved role “${newName}” to ${scope} (backup written).` })
+      setOrigName(newName)
+      setDraft((d) => (d ? { ...d, _new: false } : d))
+    } catch (e) {
+      setSaveMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!draft || !origName) return
+    setSaving(true)
+    setSaveMsg(null)
+    try {
+      await onSave(scope, { name: origName, op: 'delete' })
+      setSaveMsg({ ok: true, text: `Deleted role “${origName}” from ${scope} (backup written).` })
+      closeEditor()
+    } catch (e) {
+      setSaveMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <>
-      {sources.map((s) => {
-        const sr = Array.isArray(s.roles) ? s.roles : []
-        return sr.length === 0 ? null : (
-          <div key={s.path} className="mb-4">
+      <div className="flex items-center gap-1 mb-4">
+        {(['global', 'workspace'] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => {
+              setScope(s)
+              closeEditor()
+              setSaveMsg(null)
+            }}
+            className={
+              'px-3 py-1.5 text-sm rounded transition-colors ' +
+              (scope === s
+                ? 'bg-[var(--accent,#6366f1)] text-white'
+                : 'bg-[var(--surface-2,#2a2a2a)] text-muted hover:text-[var(--fg,#eee)]')
+            }
+          >
+            {s === 'global' ? 'Global' : 'Workspace'}
+          </button>
+        ))}
+        <button
+          onClick={startNew}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-[var(--accent,#6366f1)] text-white"
+        >
+          <Plus size={14} /> New role
+        </button>
+      </div>
+
+      {saveMsg && (
+        <div
+          className={
+            'flex items-center gap-2 text-sm mb-4 ' +
+            (saveMsg.ok ? 'text-green-500' : 'text-amber-500')
+          }
+        >
+          {saveMsg.ok ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+          {saveMsg.text}
+        </div>
+      )}
+
+      {/* Editor */}
+      {draft && (
+        <>
+          <Card>
+            <CardTitle>
+              <span className="inline-flex items-center gap-1.5">
+                <Pencil size={14} /> {draft._new ? 'New role' : `Edit role · ${origName}`} · {scope}
+              </span>
+            </CardTitle>
+            {editableSource && <PathChip meta={editableSource} />}
+            <div className="grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] mt-3">
+              <Field
+                label="Role id (file name)"
+                hint="<id>.md"
+                help="The role's id and file stem. Kebab-case: letters, digits, . _ - — no path separators. Referenced from a panel seat's role field."
+                required
+              >
+                <input
+                  className={inputCls}
+                  value={draft.name}
+                  placeholder="my-reviewer"
+                  onChange={(e) => setDraft((d) => (d ? { ...d, name: e.target.value } : d))}
+                />
+              </Field>
+              <Field
+                label="Display name"
+                hint="display_name"
+                help="Optional human-friendly name shown in listings."
+                required={false}
+              >
+                <input
+                  className={inputCls}
+                  value={draft.display_name}
+                  placeholder="My Reviewer"
+                  onChange={(e) => setDraft((d) => (d ? { ...d, display_name: e.target.value } : d))}
+                />
+              </Field>
+            </div>
+            <div className="mt-2.5">
+              <Field
+                label="Description"
+                hint="description"
+                help="One-line summary of what this persona is for."
+                required={false}
+              >
+                <input
+                  className={inputCls}
+                  value={draft.description}
+                  placeholder="Short description of this persona"
+                  onChange={(e) => setDraft((d) => (d ? { ...d, description: e.target.value } : d))}
+                />
+              </Field>
+            </div>
+            <div className="mt-2.5">
+              <Field
+                label="System prompt (body)"
+                hint="markdown body"
+                help="The persona's system prompt, prepended to the task. This is the file body below the frontmatter."
+                required
+              >
+                <textarea
+                  className={inputCls + ' min-h-[220px] font-mono text-[12px] leading-relaxed'}
+                  value={draft.body}
+                  placeholder="You are a principal-level reviewer. …"
+                  onChange={(e) => setDraft((d) => (d ? { ...d, body: e.target.value } : d))}
+                />
+              </Field>
+            </div>
+            {draft.extra && Object.keys(draft.extra).length > 0 && (
+              <p className="text-[10px] text-muted mt-2">
+                preserved frontmatter:{' '}
+                {Object.entries(draft.extra).map(([k, v]) => (
+                  <code key={k} className="mr-1.5">
+                    {k}={String(v)}
+                  </code>
+                ))}
+              </p>
+            )}
+            <div className="mt-3 pt-2.5 border-t border-[var(--border,#2a2a2a)] flex items-center gap-2">
+              <button
+                onClick={() => void handleSave()}
+                disabled={saving}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-[var(--accent,#6366f1)] text-white disabled:opacity-50"
+              >
+                <Save size={14} /> {saving ? 'Saving…' : `Save to ${scope}`}
+              </button>
+              <button
+                onClick={closeEditor}
+                className="px-3 py-1.5 text-sm rounded text-muted hover:text-[var(--fg,#eee)]"
+              >
+                Close
+              </button>
+              {/* Delete only for an existing file (inline confirm). */}
+              {origName && !draft._new && (
+                <div className="ml-auto flex items-center">
+                  {!confirmDelete ? (
+                    <button
+                      className="flex items-center gap-1.5 text-xs text-muted hover:text-amber-500"
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      <Trash2 size={13} /> Delete role
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-amber-500">Delete “{origName}”?</span>
+                      <button
+                        className="px-2 py-0.5 rounded bg-amber-600/80 text-white hover:bg-amber-600 disabled:opacity-50"
+                        disabled={saving}
+                        onClick={() => void handleDelete()}
+                      >
+                        Delete
+                      </button>
+                      <button
+                        className="px-2 py-0.5 rounded text-muted hover:text-[var(--fg,#eee)]"
+                        onClick={() => setConfirmDelete(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </Card>
+          <div className="h-3" />
+        </>
+      )}
+
+      {/* Editable role files for the current scope */}
+      <Card>
+        <CardTitle>
+          <span className="inline-flex items-center gap-1.5">
+            <FileText size={14} /> Role files · {scope} (editable)
+          </span>
+        </CardTitle>
+        {editableSource ? <PathChip meta={editableSource} /> : (
+          <p className="text-xs text-muted mt-1">No editable roles directory resolved for {scope}.</p>
+        )}
+        {editableSource?.error && <p className="text-xs text-amber-500 mt-1">{editableSource.error}</p>}
+        {editableSource && !editableSource.exists && (
+          <p className="text-xs text-muted mt-2">
+            No roles directory at this scope yet — saving a role creates <code>{editableSource.path}</code>.
+          </p>
+        )}
+        {editableRoles.length === 0 ? (
+          <p className="text-sm text-muted mt-2">
+            No role files at this scope. Click <strong>New role</strong> to add one.
+          </p>
+        ) : (
+          <div className="mt-3 flex flex-col gap-1.5">
+            {editableRoles.map((r) => (
+              <div
+                key={r.path || r.name}
+                className="flex items-center gap-2 p-2 rounded bg-[var(--surface-2,#1e1e1e)]"
+              >
+                <span className="px-2 py-0.5 rounded text-xs bg-[var(--surface-3,#2a2a2a)] text-[var(--fg,#eee)]">
+                  {r.name}
+                </span>
+                {r.description && (
+                  <span className="text-xs text-muted truncate flex-1">{r.description}</span>
+                )}
+                {r.error && <span className="text-xs text-amber-500">{r.error}</span>}
+                <button
+                  className="ml-auto flex items-center gap-1 text-xs text-muted hover:text-[var(--accent,#6366f1)]"
+                  onClick={() => void openRole(r.name)}
+                  disabled={opening === r.name}
+                >
+                  <Pencil size={12} /> {opening === r.name ? 'Opening…' : 'Edit'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Built-in personas — read-only reference */}
+      {builtinRoles.length > 0 && (
+        <>
+          <div className="h-3" />
+          <Card>
+            <CardTitle>Built-in personas (read-only reference)</CardTitle>
+            <p className="text-xs text-muted mt-1">
+              These ship in the Rutherford server (not files) and cannot be edited here. Reference
+              them from a panel seat's <code>role</code> field.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {builtinRoles.map((name) => (
+                <span
+                  key={name}
+                  className="px-2 py-1 rounded text-xs bg-[var(--surface-2,#2a2a2a)] text-muted"
+                  title="Built-in persona — read-only"
+                >
+                  {name}
+                </span>
+              ))}
+            </div>
+          </Card>
+        </>
+      )}
+
+      {/* Reference role_dirs sources (from config) — read-only listing */}
+      {referenceSources.map((s) =>
+        Array.isArray(s.roles) && s.roles.length > 0 ? (
+          <div key={s.path}>
+            <div className="h-3" />
             <Card>
-              <CardTitle>Roles · {s.scope} (read-only)</CardTitle>
+              <CardTitle>Role files · {s.scope} (read-only)</CardTitle>
               <PathChip meta={s} />
               <div className="mt-3 flex flex-wrap gap-2">
-                {sr.map((r) => (
+                {s.roles.map((r) => (
                   <span
-                    key={r.path}
-                    className="px-2 py-1 rounded text-xs bg-[var(--surface-2,#2a2a2a)] text-[var(--fg,#eee)]"
+                    key={r.path || r.name}
+                    className="px-2 py-1 rounded text-xs bg-[var(--surface-2,#2a2a2a)] text-muted"
                     title={r.path}
                   >
                     {r.name}
@@ -1536,8 +2374,8 @@ function RolesView({ roles }: { roles: RolesResp | null }) {
               </div>
             </Card>
           </div>
-        )
-      })}
+        ) : null,
+      )}
     </>
   )
 }

@@ -312,6 +312,106 @@ def _acp_sources() -> list[dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------
+# Meta enums — the option sets the UI renders dropdowns from
+# --------------------------------------------------------------------------
+#
+# These mirror Rutherford's own reference (reference/config.md, reference/panels.md)
+# so the UI can offer closed dropdowns for values whose valid set is KNOWN, and
+# fall back to a free-text datalist for open values (models, ids the user may add).
+#
+# Agent ids are sourced authoritatively as follows. A backend route handler runs
+# in-process in the gateway and is handed only an AppContext (cron/events/storage/
+# spawn/job SDKs) — it has NO MCP client surface and no ACP session, so it CANNOT
+# call Rutherford's own capabilities/doctor MCP tools, and no permissions.mcpTools
+# grant changes that (that grant is an AGENT-side prompting scope, not a backend
+# capability). So we take the documented fallback: the built-in roster below,
+# UNIONED at request time with every id the user's config actually declares
+# (enabled_agents allowlist + [agents.<id>] tables, both scopes) and every
+# acp.json agent_servers key. The UI degrades to a free-text datalist so a user
+# can always type an id we did not enumerate.
+
+# Rutherford's 19 curated built-in agents (reference/tools.md). Only the ones
+# installed + signed in on a given machine actually drive, but all 19 are valid
+# ids to reference in config/panels.
+_BUILTIN_AGENT_IDS = (
+    "goose", "opencode", "vibe", "cline", "junie", "kimi", "openhands",
+    "codex", "claude_code", "copilot", "qwen", "droid", "cursor", "kiro",
+    "pi", "hermes", "gemini", "qoder", "grok",
+)
+
+# Built-in role personas that ship in the Rutherford server (reference/config.md).
+# These are NOT files on disk; the roles editor surfaces them read-only as
+# reference and only user role FILES are editable.
+_BUILTIN_ROLE_IDS = (
+    "principal-reviewer", "architect", "debugger", "security-reviewer", "explainer",
+)
+
+# Consensus aggregation strategies (reference/panels.md).
+_STRATEGIES = (
+    "all-voices", "unanimous", "majority", "plurality", "weighted",
+    "parity-pair", "rank",
+)
+
+# Safety postures (reference/config.md).
+_SAFETY_MODES = ("read_only", "propose", "write", "yolo")
+
+# Run persistence dispositions (reference/config.md).
+_PERSISTENCE = ("ephemeral", "job")
+
+
+def _config_derived_agent_ids() -> list[str]:
+    """Agent ids the user's config actually declares, across both scopes.
+
+    Union of: enabled_agents allowlist entries, [agents.<id>] table keys, and
+    acp.json agent_servers keys — global then project. Order is preserved and
+    de-duplicated so the UI can present a stable list.
+    """
+    ids: list[str] = []
+
+    def _add(candidate: Any) -> None:
+        s = str(candidate).strip()
+        if s and s not in ids:
+            ids.append(s)
+
+    for cfg_path in (_global_config_path(), _project_config_path()[0]):
+        data, _ = _read_toml(cfg_path)
+        for a in _split_pathsep(data.get("enabled_agents", [])):
+            _add(a)
+        agents_tbl = data.get("agents")
+        if isinstance(agents_tbl, dict):
+            for aid in agents_tbl:
+                _add(aid)
+    for src in _acp_sources():
+        for key in (src.get("agent_servers") or {}):
+            _add(key)
+    return ids
+
+
+def _role_ids() -> list[str]:
+    """Every role id the UI may reference in a panel seat: built-ins first, then
+    user role FILE stems discovered under global/project .rutherford/roles and any
+    config role_dirs. De-duplicated, order-preserving."""
+    ids: list[str] = list(_BUILTIN_ROLE_IDS)
+    for src in _list_role_sources():
+        for r in src.get("roles", []):
+            name = str(r.get("name", "")).strip()
+            if name and name not in ids:
+                ids.append(name)
+    return ids
+
+
+def _agent_ids_union() -> list[str]:
+    """The full agent-id option set for the UI: built-ins UNIONed with every id
+    the user's config declares. Built-ins first (stable, familiar), then any
+    extra configured/acp id not already listed."""
+    ids: list[str] = list(_BUILTIN_AGENT_IDS)
+    for aid in _config_derived_agent_ids():
+        if aid not in ids:
+            ids.append(aid)
+    return ids
+
+
+# --------------------------------------------------------------------------
 # TOML serialization (limited schema, no comment preservation)
 # --------------------------------------------------------------------------
 
@@ -1091,15 +1191,150 @@ async def _handle_panels_write(request: web.Request, ctx: AppContext) -> web.Res
         )
 
 
-async def _handle_roles(request: web.Request, ctx: AppContext) -> web.Response:
-    """GET /roles — role markdown files under global + project .rutherford/roles
-    plus any role_dirs declared in config."""
+# --------------------------------------------------------------------------
+# Roles: markdown files (frontmatter + body) round-trip + read/write
+# --------------------------------------------------------------------------
+#
+# A role is a markdown file: a leading frontmatter block delimited by `---`
+# lines carrying `name` / `description` (and an optional `display_name`), then
+# the body which is the system prompt. Rutherford discovers role files under
+# ~/.rutherford/roles/, <cwd>/.rutherford/roles/, and any role_dirs. We parse
+# only the small scalar frontmatter the format uses (a flat key: value map) and
+# treat everything after the closing `---` as the verbatim body, so a
+# parse→serialize round-trip reproduces the body byte-for-byte. Built-in roles
+# ship in the server (not as files); they are surfaced read-only as reference
+# and only user role FILES are editable.
+
+# Frontmatter keys surfaced as first-class fields; any OTHER scalar key is
+# preserved (round-tripped) under `extra`.
+_ROLE_KNOWN_FM_KEYS = ("name", "display_name", "description")
+
+
+def _parse_role_md(text: str) -> dict[str, Any]:
+    """Parse a role markdown file into a structured model.
+
+    The frontmatter is the block between a leading ``---`` line and the next
+    ``---`` line; each line inside is a ``key: value`` scalar (value optionally
+    quoted). Everything after the closing ``---`` line is the body, sliced from
+    the ORIGINAL text so CRLF / trailing spaces are not altered on round-trip. A
+    file with NO leading ``---`` parses to empty frontmatter + whole text body.
+
+    Returns {name, display_name, description, body, extra}.
+    """
+    name = display_name = description = ""
+    extra: dict[str, str] = {}
+    body = text
+
+    lines = text.splitlines(keepends=True)
+    if lines and lines[0].strip() == "---":
+        close_idx = None
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                close_idx = i
+                break
+        if close_idx is not None:
+            fm_lines = lines[1:close_idx]
+            body = "".join(lines[close_idx + 1:])
+            for raw in fm_lines:
+                stripped = raw.strip()
+                if not stripped or stripped.startswith("#") or ":" not in stripped:
+                    continue
+                k, v = stripped.split(":", 1)
+                key = k.strip()
+                val = v.strip()
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                    val = val[1:-1]
+                if key == "name":
+                    name = val
+                elif key == "display_name":
+                    display_name = val
+                elif key == "description":
+                    description = val
+                elif key:
+                    extra[key] = val
+    return {
+        "name": name,
+        "display_name": display_name,
+        "description": description,
+        "body": body,
+        "extra": extra,
+    }
+
+
+def _fm_scalar_needs_quote(value: str) -> bool:
+    """Quote a frontmatter value only when a bare scalar would misparse: empty,
+    leading/trailing whitespace, a leading structural char, or an embedded
+    ``:``/`` #``. Minimal quoting lets the common case round-trip byte-for-byte."""
+    if value == "":
+        return True
+    if value != value.strip():
+        return True
+    if value[0] in ('"', "'", "[", "{", "&", "*", "!", "|", ">", "%", "@", "`", "#"):
+        return True
+    return ":" in value or " #" in value
+
+
+def _emit_fm_scalar(value: str) -> str:
+    if _fm_scalar_needs_quote(value):
+        esc = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{esc}"'
+    return value
+
+
+def _serialize_role_md(role: dict[str, Any]) -> str:
+    """Serialize a parsed role model back to markdown text.
+
+    Emits a frontmatter block (name, display_name if set, description, then any
+    extra keys in order) then the verbatim body. The parser strips exactly the
+    closing ``---`` line's own newline, so emitting ``"\\n" + body`` round-trips
+    a body that begins with its own blank line (as the shipped example does).
+    """
+    name = str(role.get("name", "")).strip()
+    fm: list[str] = ["---", f"name: {_emit_fm_scalar(name)}"]
+    display_name = str(role.get("display_name", "") or "")
+    if display_name.strip() != "":
+        fm.append(f"display_name: {_emit_fm_scalar(display_name)}")
+    fm.append(f"description: {_emit_fm_scalar(str(role.get('description', '') or ''))}")
+    extra = role.get("extra") or {}
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            fm.append(f"{k}: {_emit_fm_scalar(str(v))}")
+    fm.append("---")
+    body = role.get("body", "")
+    if not isinstance(body, str):
+        body = str(body)
+    return "\n".join(fm) + "\n" + body
+
+
+def _role_roundtrip_ok(text: str) -> bool:
+    """parse → serialize → parse structural equality guard for a role file."""
+    first = _parse_role_md(text)
+    second = _parse_role_md(_serialize_role_md(first))
+    return first == second
+
+
+def _roles_dir_for_scope(scope: str) -> Path:
+    """global → ~/.rutherford/roles, workspace → <cwd>/.rutherford/roles."""
+    if scope == "global":
+        return _home() / ".rutherford" / "roles"
+    return _project_root() / ".rutherford" / "roles"
+
+
+def _list_role_sources() -> list[dict[str, Any]]:
+    """Shared role discovery used by GET /rutherford-roles and the
+    meta/role-id helpers.
+
+    One entry per role directory (global + project .rutherford/roles, then any
+    config role_dirs), each {path, scope, platform, exists, editable, roles}.
+    Each role carries name/file/path plus parsed description/display_name so the
+    editor renders a list without a second fetch. Only .md FILES are listed; a
+    per-file parse error is surfaced on that role, never raised.
+    """
     dirs: list[tuple[Path, str]] = []
     for d in _rutherford_dirs():
         scope = "global" if d == _home() / ".rutherford" else "workspace"
         dirs.append((d / "roles", scope))
 
-    # role_dirs from config (both scopes), split on os.pathsep.
     g_data, _ = _read_toml(_global_config_path())
     p_path, _ = _project_config_path()
     p_data, _ = _read_toml(p_path)
@@ -1114,21 +1349,321 @@ async def _handle_roles(request: web.Request, ctx: AppContext) -> web.Response:
         if key in seen:
             continue
         seen.add(key)
-        meta = {
+        meta: dict[str, Any] = {
             "path": str(path),
             "scope": scope,
             "platform": _platform_label(),
             "exists": path.is_dir(),
+            # editable only for the two writable scopes the PUT accepts (never
+            # config:role_dirs, whose target may be anywhere).
+            "editable": scope in ("global", "workspace"),
         }
-        roles: list[dict[str, str]] = []
+        roles: list[dict[str, Any]] = []
         if path.is_dir():
             try:
                 for f in sorted(path.glob("*.md")):
-                    roles.append({"name": f.stem, "file": f.name, "path": str(f)})
+                    entry: dict[str, Any] = {"name": f.stem, "file": f.name, "path": str(f)}
+                    try:
+                        parsed = _parse_role_md(f.read_text(encoding="utf-8"))
+                        entry["description"] = parsed.get("description", "")
+                        entry["display_name"] = parsed.get("display_name", "")
+                    except OSError as exc:
+                        entry["error"] = f"{type(exc).__name__}: {exc}"
+                    roles.append(entry)
             except OSError as exc:
                 meta["error"] = f"{type(exc).__name__}: {exc}"
         sources.append({**meta, "roles": roles})
-    return web.json_response({"platform": _platform_label(), "sources": sources})
+    return sources
+
+
+def _safe_role_filename(name: str) -> str | None:
+    """Turn a role name into a safe ``<stem>.md`` filename, or None if unsafe.
+
+    Rejects path separators, ``..``, a leading dot, and empties. Allows a
+    kebab-case-ish id: an alnum start then alnum / ``. _ -``.
+    """
+    import re as _re
+    stem = name.strip()
+    if not stem:
+        return None
+    if stem.lower().endswith(".md"):
+        stem = stem[:-3]
+    if not stem or stem in (".", ".."):
+        return None
+    if any(sep in stem for sep in ("/", "\\")) or ".." in stem or stem[0] == ".":
+        return None
+    if not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", stem):
+        return None
+    return f"{stem}.md"
+
+
+def _atomic_write_role(path: Path, role: dict[str, Any]) -> None:
+    """Serialize + round-trip-validate + atomically write a role .md, backing up
+    first. Raises ValueError if the serialized text fails the round-trip."""
+    text = _serialize_role_md(role)
+    if not _role_roundtrip_ok(text):
+        raise ValueError("serialized role file failed the parse→serialize→parse round-trip")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        stamp = date.today().isoformat()
+        bak = path.with_name(f"{path.name}.bak-{stamp}")
+        n = 1
+        while bak.exists():
+            bak = path.with_name(f"{path.name}.bak-{stamp}.{n}")
+            n += 1
+        bak.write_bytes(path.read_bytes())
+
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _backup_and_delete_role(path: Path) -> None:
+    """Timestamped .bak snapshot then delete a role file. No-op-safe caller
+    checks existence first; here we assume the file exists."""
+    stamp = date.today().isoformat()
+    bak = path.with_name(f"{path.name}.bak-{stamp}")
+    n = 1
+    while bak.exists():
+        bak = path.with_name(f"{path.name}.bak-{stamp}.{n}")
+        n += 1
+    bak.write_bytes(path.read_bytes())
+    path.unlink()
+
+
+async def _handle_meta(request: web.Request, ctx: AppContext) -> web.Response:
+    """GET /rutherford-meta — the option sets the UI renders dropdowns from.
+
+    {agent_ids, agent_ids_builtin, agent_ids_source, strategies, safety_modes,
+     persistence, roles, roles_builtin}. agent_ids is built-ins UNIONed with
+     config-declared ids (see the meta-enums note); agent_ids_source records how
+     it was sourced so the UI (and this report) can state it honestly.
+    """
+    try:
+        derived = _config_derived_agent_ids()
+        payload = {
+            "platform": _platform_label(),
+            "agent_ids": _agent_ids_union(),
+            "agent_ids_builtin": list(_BUILTIN_AGENT_IDS),
+            "agent_ids_config_derived": derived,
+            # We cannot reach Rutherford's capabilities/doctor MCP tools from an
+            # in-process backend route (no MCP client on AppContext), so the
+            # roster is NOT live-probed — it is the built-in set unioned with
+            # config. The UI degrades to a free-text datalist regardless.
+            "agent_ids_source": "builtin+config-derived (no backend MCP; free-text fallback in UI)",
+            "strategies": list(_STRATEGIES),
+            "safety_modes": list(_SAFETY_MODES),
+            "persistence": list(_PERSISTENCE),
+            "roles": _role_ids(),
+            "roles_builtin": list(_BUILTIN_ROLE_IDS),
+        }
+        return web.json_response(payload)
+    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
+        tb = traceback.format_exc()
+        return web.json_response(
+            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
+        )
+
+
+async def _handle_roles(request: web.Request, ctx: AppContext) -> web.Response:
+    """GET /rutherford-roles — role markdown files under global + project
+    .rutherford/roles plus any role_dirs declared in config, PLUS the server's
+    built-in roles (surfaced read-only as reference).
+
+    ``?scope=global|workspace&name=<id>`` returns the FULL parsed body of one
+    editable role file (name/display_name/description/body/extra) so the editor
+    can open it without a second endpoint; otherwise the listing is returned.
+    """
+    # Single-role body fetch (for the edit form).
+    q_scope = request.query.get("scope")
+    q_name = request.query.get("name")
+    if q_scope and q_name:
+        scope = q_scope.lower()
+        if scope not in ("global", "workspace"):
+            return web.json_response(
+                {"error": f"invalid scope {scope!r}; expected global|workspace"}, status=400
+            )
+        fname = _safe_role_filename(q_name)
+        if not fname:
+            return web.json_response({"error": f"unsafe role name {q_name!r}"}, status=400)
+        path = _roles_dir_for_scope(scope) / fname
+        if not path.is_file():
+            return web.json_response(
+                {"error": f"role {q_name!r} not found in {scope} scope", "exists": False},
+                status=404,
+            )
+        try:
+            parsed = _parse_role_md(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=500)
+        return web.json_response(
+            {
+                "scope": scope,
+                "path": str(path),
+                "platform": _platform_label(),
+                "exists": True,
+                "role": {
+                    "name": parsed["name"] or path.stem,
+                    "display_name": parsed["display_name"],
+                    "description": parsed["description"],
+                    "body": parsed["body"],
+                    "extra": parsed["extra"],
+                },
+            }
+        )
+
+    return web.json_response(
+        {
+            "platform": _platform_label(),
+            "sources": _list_role_sources(),
+            # Built-in personas ship in the server (not as files): reference only,
+            # not editable. The UI shows these read-only.
+            "builtin": [{"name": r} for r in _BUILTIN_ROLE_IDS],
+        }
+    )
+
+
+async def _handle_roles_write(request: web.Request, ctx: AppContext) -> web.Response:
+    """PUT /rutherford-roles?scope=global|workspace — create / edit / delete a
+    role .md.
+
+    NON-reserved base (Kiro Crew reserves /api/apps/<app>/config). Body:
+      {"name": "<id>", "op": "delete"}                     — delete the role file
+      {"name": "<id>", "display_name"?, "description"?,
+       "body": "<system prompt>", "extra"?: {...}}          — create or overwrite
+
+    Same safety envelope as config/panels: validate + round-trip before touching
+    disk, a timestamped .bak of an edited/deleted file, an atomic temp-file +
+    os.replace, path-traversal rejection, and only ever a ``.md`` under the
+    resolved scope's ``.rutherford/roles`` directory (never a request path).
+    """
+    scope = (request.query.get("scope") or "global").lower()
+    if scope not in ("global", "workspace"):
+        return web.json_response(
+            {"error": f"invalid scope {scope!r}; expected global|workspace"}, status=400
+        )
+    try:
+        try:
+            body = await request.json()
+        except (ValueError, TypeError) as exc:
+            return web.json_response({"error": f"invalid JSON body: {exc}"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+
+        name = str(body.get("name", "")).strip()
+        if not name:
+            return web.json_response({"error": "role 'name' is required"}, status=400)
+        # A built-in id is a server persona, not a file — refuse to shadow it via
+        # this editor (the user can still add a same-named file by other means,
+        # but the guided editor should not silently override a built-in).
+        if name in _BUILTIN_ROLE_IDS:
+            return web.json_response(
+                {"error": f"{name!r} is a built-in role (server persona); it is read-only here"},
+                status=400,
+            )
+        fname = _safe_role_filename(name)
+        if not fname:
+            return web.json_response(
+                {"error": f"unsafe or invalid role name {name!r} (use a kebab-case id)"},
+                status=400,
+            )
+
+        roles_dir = _roles_dir_for_scope(scope)
+        path = (roles_dir / fname)
+        resolved = path.resolve()
+        # Defense in depth: the parent must be the resolved scope roles dir and
+        # the name must be a .md file.
+        if resolved.name != fname or resolved.suffix != ".md":
+            return web.json_response({"error": "refusing to write a non .md role target"}, status=400)
+        expected_parent = roles_dir.resolve()
+        if resolved.parent != expected_parent:
+            return web.json_response(
+                {"error": "refusing to write outside the resolved .rutherford/roles directory"},
+                status=400,
+            )
+
+        op = str(body.get("op", "")).strip().lower()
+        if op == "delete":
+            if not path.is_file():
+                return web.json_response(
+                    {"error": f"role {name!r} not found in {scope} scope", "exists": False},
+                    status=404,
+                )
+            try:
+                _backup_and_delete_role(path)
+            except OSError as exc:
+                return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=500)
+            return web.json_response(
+                {
+                    "scope": scope,
+                    "path": str(path),
+                    "platform": _platform_label(),
+                    "written": True,
+                    "deleted": True,
+                    "sources": _list_role_sources(),
+                }
+            )
+
+        # Create / overwrite.
+        role_body = body.get("body", "")
+        if not isinstance(role_body, str):
+            return web.json_response({"error": "role 'body' must be a string"}, status=400)
+        extra = body.get("extra") if isinstance(body.get("extra"), dict) else {}
+        # Reject a non-scalar extra value; frontmatter is a flat scalar map.
+        for k, v in extra.items():
+            if isinstance(v, (dict, list)):
+                return web.json_response(
+                    {"error": f"role frontmatter key {k!r} must be a scalar"}, status=400
+                )
+        role = {
+            "name": name,
+            "display_name": str(body.get("display_name", "") or ""),
+            "description": str(body.get("description", "") or ""),
+            "body": role_body,
+            "extra": {str(k): str(v) for k, v in extra.items()},
+        }
+        try:
+            _atomic_write_role(path, role)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except OSError as exc:
+            return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=500)
+
+        # Re-read and echo the persisted role so the UI can confirm via written===true.
+        try:
+            parsed = _parse_role_md(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=500)
+        return web.json_response(
+            {
+                "scope": scope,
+                "path": str(path),
+                "platform": _platform_label(),
+                "written": True,
+                "role": {
+                    "name": parsed["name"] or path.stem,
+                    "display_name": parsed["display_name"],
+                    "description": parsed["description"],
+                    "body": parsed["body"],
+                    "extra": parsed["extra"],
+                },
+                "sources": _list_role_sources(),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
+        tb = traceback.format_exc()
+        return web.json_response(
+            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1137,14 +1672,25 @@ async def _handle_roles(request: web.Request, ctx: AppContext) -> web.Response:
 
 def register_routes(ctx: AppContext) -> list[AppRoute]:
     """Return the app's routes. Base prefix /api/apps/rutherford is applied by
-    the gateway's RouteRegistry. GET routes are read-only; PUT
-    /rutherford-config writes
-    config.toml (Phase 2)."""
+    the gateway's RouteRegistry.
+
+    GET routes are read-only. Write routes (PUT) live at NON-reserved paths
+    because Kiro Crew reserves /api/apps/<app>/config for its own store:
+      - PUT /rutherford-config  writes config.toml
+      - PUT /rutherford-panels  writes panels.toon
+      - PUT /rutherford-roles   creates/edits/deletes a role .md
+    The roles GET+PUT share the /rutherford-roles base (roles GET was moved off
+    the bare /roles so the read and write surfaces are coherent). Panels keep
+    GET /panels + PUT /rutherford-panels (the GET path is not reserved).
+    GET /rutherford-meta returns the option sets the UI renders dropdowns from.
+    """
     return [
         AppRoute("GET", "/status", _handle_status),
+        AppRoute("GET", "/rutherford-meta", _handle_meta),
         AppRoute("GET", "/rutherford-config", _handle_config),
         AppRoute("PUT", "/rutherford-config", _handle_config_write),
         AppRoute("GET", "/panels", _handle_panels),
         AppRoute("PUT", "/rutherford-panels", _handle_panels_write),
-        AppRoute("GET", "/roles", _handle_roles),
+        AppRoute("GET", "/rutherford-roles", _handle_roles),
+        AppRoute("PUT", "/rutherford-roles", _handle_roles_write),
     ]

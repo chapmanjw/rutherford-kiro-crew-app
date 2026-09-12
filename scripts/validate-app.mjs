@@ -465,6 +465,10 @@ if (app === null || typeof app !== "object" || Array.isArray(app)) {
  *     (the two write surfaces), and
  *   - NO route path is a reserved bare ``/config`` (any method).
  * If the panels write route were reverted to a reserved name (or dropped), this fails CI.
+ *
+ * v2 additions: the config UI also depends on GET ``/rutherford-meta`` (dropdown option sets) and
+ * on the roles editor's ``/rutherford-roles`` GET (list + single-role body) and PUT (create/edit/
+ * delete). This guard now also asserts those three are registered, so dropping any of them fails CI.
  */
 function enforceBackendRouteContract() {
   const rel = "backend/routes.py";
@@ -482,6 +486,7 @@ function enforceBackendRouteContract() {
   const ROUTE_RE = /AppRoute\(\s*"(GET|PUT|POST|DELETE|PATCH)"\s*,\s*"([^"]+)"/g;
   for (const m of text.matchAll(ROUTE_RE)) routes.push({ method: m[1], path: m[2] });
 
+  const hasGet = (p) => routes.some((r) => r.method === "GET" && r.path === p);
   const hasPut = (p) => routes.some((r) => r.method === "PUT" && r.path === p);
 
   if (!hasPut("/rutherford-config")) {
@@ -492,6 +497,33 @@ function enforceBackendRouteContract() {
       `${rel}: no PUT route registered for "/rutherford-panels" (the panels write surface). ` +
         `Panels write must use the NON-reserved "/rutherford-panels" path — Kiro Crew reserves ` +
         `/api/apps/<app>/config, so a write route must avoid reserved names.`,
+    );
+  }
+
+  // The v2 UI drives its dropdowns from GET /rutherford-meta (option sets:
+  // agent_ids/strategies/safety_modes/persistence/roles). Its absence would
+  // silently degrade every dropdown to free text, so assert it is registered.
+  if (!hasGet("/rutherford-meta")) {
+    fail(
+      `${rel}: no GET route registered for "/rutherford-meta" (the UI dropdown option-set surface: ` +
+        `agent_ids/strategies/safety_modes/persistence/roles).`,
+    );
+  }
+
+  // The roles editor reads AND writes at the NON-reserved "/rutherford-roles"
+  // base (GET lists + fetches one body; PUT does create/edit/delete). Assert
+  // BOTH — a missing GET breaks the editor's list/open, a missing PUT breaks
+  // save/delete. Both must avoid the reserved /config name (checked below).
+  if (!hasGet("/rutherford-roles")) {
+    fail(
+      `${rel}: no GET route registered for "/rutherford-roles" (the roles read surface: ` +
+        `listing + single-role body for the editor).`,
+    );
+  }
+  if (!hasPut("/rutherford-roles")) {
+    fail(
+      `${rel}: no PUT route registered for "/rutherford-roles" (the roles write surface: ` +
+        `create/edit/delete a role .md). Must use the NON-reserved "/rutherford-roles" path.`,
     );
   }
 
