@@ -689,6 +689,47 @@ behaviorCase("(hh) role delete confirms only on explicit absence (App.tsx contra
   }
 });
 
+// (ii) DELETE-VERIFICATION rejects an ERRORED role listing as deletion proof (guards FIX 1's
+//      listing-absence fallback): the backend emits `{ scope, roles: [], error: "..." }` when
+//      directory enumeration fails (permissions/I/O). An empty roles array under an `error` must
+//      NOT read as "role absent" — otherwise an unconfirmed delete PLUS a failed listing would
+//      falsely confirm a delete while the file still exists. The delete branch's listing-absence
+//      path must require the scoped source to be ERROR-FREE before treating it as authoritative.
+//
+//      Falsifiable: removing the `!src.error` guard (back to `if (src && Array.isArray(src.roles))`)
+//      makes this test FAIL. Verified by temporarily reverting the guard.
+behaviorCase("(ii) role delete rejects an errored listing as deletion proof (App.tsx contract)", () => {
+  const appPath = join(repoRoot, "ui", "src", "App.tsx");
+  if (!existsSync(appPath)) throw new Error(`missing ${appPath}`);
+  const src = readFileSync(appPath, "utf8");
+
+  const start = src.indexOf("if (isDelete) {");
+  if (start === -1) throw new Error("could not locate the isDelete branch in saveRole");
+  const elseAt = src.indexOf("} else {", start);
+  if (elseAt === -1) throw new Error("could not locate the end of the isDelete branch");
+  const branch = src.slice(start, elseAt);
+
+  // Locate the listing-absence guard: the `if (src && ...)` condition that gates
+  // reading src.roles for a `stillThere` check within the delete branch.
+  const guardMatch = branch.match(/if\s*\(\s*src\s*&&[\s\S]*?\)\s*\{[\s\S]*?stillThere/);
+  if (!guardMatch) {
+    throw new Error("could not locate the scoped-source listing-absence guard in the delete branch");
+  }
+  const guard = guardMatch[0];
+  // The guard MUST reject a source carrying an `error` (e.g. `!src.error` / `!src?.error`
+  // / `src.error == null`). Without it, `{ scope, roles: [], error }` reads as absence.
+  const guardsAgainstError =
+    /!\s*src\??\.error\b/.test(guard) ||
+    /src\??\.error\s*(?:==|===)\s*(?:null|undefined)/.test(guard) ||
+    /!\s*\w*[Ee]rror\b/.test(guard.replace(/\.some[\s\S]*$/, ""));
+  if (!guardsAgainstError) {
+    throw new Error(
+      "delete branch treats an errored role listing ({ scope, roles: [], error }) as deletion proof — " +
+        "the scoped-source absence guard must require the source to be error-free (e.g. `!src.error`)",
+    );
+  }
+});
+
 // --- report ---
 const total = passed + failed;
 if (failed) {

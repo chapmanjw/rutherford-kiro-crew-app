@@ -482,7 +482,13 @@ export default function Rutherford() {
               // entry for this scope. Absent that, we cannot assert absence.
               const sources = Array.isArray(listing?.sources) ? listing!.sources : null
               const src = sources ? sources.find((s) => s.scope === scope) : undefined
-              if (src && Array.isArray(src.roles)) {
+              // The scoped source is authoritative for absence ONLY when it is
+              // present, carries NO `error`, and has a well-formed (array)
+              // `roles`. The backend emits `{ scope, roles: [], error: "..." }`
+              // when directory enumeration fails (permissions/I/O); an empty or
+              // incomplete list under an error must NOT read as "role absent",
+              // or a failed listing would masquerade as a confirmed delete.
+              if (src && !src.error && Array.isArray(src.roles)) {
                 const stillThere = src.roles.some((r) => r.name === payload.name)
                 if (!stillThere) sawExplicitAbsence = true
               }
