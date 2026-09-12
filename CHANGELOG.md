@@ -46,6 +46,16 @@ a full Config / Panels / Roles editor backed by safe, atomic writes.
   GET and PUT agree on all three project-config names while still rejecting any out-of-directory or
   traversal target the resolver can never produce.
 
+## [1.0.1] - 2026-09-09
+
+### Fixed
+
+- Corrected the `rutherford-orchestrator` agent's `@kirocrew-core` tools grant from the per-tool form
+  (`@kirocrew-core/spawn_run` + `@kirocrew-core/spawn_list`) to the whole-server form (`@kirocrew-core`).
+  The per-tool form does not mount, so native `spawn_run` delegation to Kiro Crew agents was
+  unavailable; the whole-server grant makes native `spawn_run` delegation work. `allowedTools` is
+  unchanged (auto-approval still scoped to `@kirocrew-core/spawn_list`).
+
 ## [1.0.0] - 2026-09-09
 
 First release of the **Rutherford Kiro Crew app** — a fork/port of the
@@ -72,4 +82,5 @@ Kiro Crew app format.
   grant.
 
 [2.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.0.0
+[1.0.1]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v1.0.1
 [1.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v1.0.0
