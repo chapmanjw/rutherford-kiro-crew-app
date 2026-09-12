@@ -613,15 +613,23 @@ async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Res
             return web.json_response({"error": verr}, status=400)
         assert clean is not None
 
-        # Only ever write the resolved global/workspace config.toml path. The
-        # path comes from our own resolver, never from the request, so traversal
-        # cannot steer it — but we defensively confirm the target is named
-        # config.toml inside its resolved parent and reject anything else.
+        # Only ever write the path the SHARED resolver produces for this scope —
+        # the exact same file the GET read layer reported (both call
+        # _resolve_config_path). The path comes from our own resolver, never
+        # from the request, so traversal cannot steer it; the name literal was
+        # only defense-in-depth, but hardcoding "config.toml" made PUT reject a
+        # project on rutherford.toml / .rutherford.toml that GET happily reads
+        # (BLOCKER 1). Assert the target EQUALS the resolver's output instead, so
+        # GET and PUT agree on all three project-config names AND any out-of-dir
+        # or traversal target (which the resolver can never produce) is still
+        # rejected.
         path = _resolve_config_path(scope)
         resolved = path.resolve()
-        if resolved.name != "config.toml":
+        expected = _resolve_config_path(scope).resolve()
+        if resolved != expected:
             return web.json_response(
-                {"error": "refusing to write a non config.toml target"}, status=400
+                {"error": "refusing to write a target the config resolver did not produce"},
+                status=400,
             )
         # Reject an obvious traversal attempt smuggled via RUTHERFORD_CONFIG.
         if ".." in Path(os.environ.get("RUTHERFORD_CONFIG", "")).parts:

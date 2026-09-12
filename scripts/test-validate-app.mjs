@@ -893,6 +893,151 @@ behaviorCase("(ll) reachability test is falsifiable (reverting to available:true
   }
 });
 
+// (mm) WRITE-GUARD CONTRACT (guards BLOCKER 1): the PUT /rutherford-config write guard must accept
+//      whatever the SHARED resolver produces for a scope — including a project on rutherford.toml or
+//      .rutherford.toml, which the GET read layer already resolves — and must REJECT an out-of-dir /
+//      traversal target. We exercise the REAL resolver + guard predicate from backend/routes.py by
+//      AST-extracting the self-contained path helpers and exec'ing them in a throwaway Python
+//      process (routes.py imports aiohttp at module top, absent here, so we slice out only the
+//      stdlib-only helpers). The guard predicate under test is exactly the shipped one:
+//          resolved == _resolve_config_path(scope).resolve()
+//      We drive _project_config_path()/_resolve_config_path() against a temp project by monkeypatching
+//      _project_root() to a fixture dir seeded with rutherford.toml (FIRST candidate) or
+//      .rutherford.toml, then assert the guard ACCEPTS that resolver-produced target and REJECTS an
+//      out-of-dir target (e.g. the home dir's config.toml, or a ../.. traversal).
+//
+//      Falsifiable: if the guard reverts to the hardcoded `resolved.name != "config.toml"`, a
+//      rutherford.toml / .rutherford.toml resolver target is REJECTED — the accept assertions below
+//      then fail. Proven non-vacuous by (nn), which runs the pre-fix predicate and shows it rejects.
+behaviorCase("(mm) config write guard accepts resolver-produced rutherford.toml/.rutherford.toml, rejects out-of-dir (real backend helpers)", () => {
+  const py = resolvePython();
+  if (!py) throw new Error("no Python interpreter found (python/py/python3)");
+  const routesPath = join(repoRoot, "backend", "routes.py");
+  if (!existsSync(routesPath)) throw new Error(`missing ${routesPath}`);
+
+  const driver = [
+    "import ast, sys, os, json, tempfile",
+    "from pathlib import Path",
+    "src = open(sys.argv[1], encoding='utf-8').read()",
+    // Pull the self-contained path resolver helpers (stdlib-only).
+    "want = {'_home','_project_root','_project_config_path','_global_config_path','_resolve_config_path','_global_config_dir_candidates','_global_config_dir','_PROJECT_CONFIG_CANDIDATES'}",
+    "mod = ast.parse(src)",
+    "segs=[]",
+    "for n in mod.body:",
+    "    if isinstance(n, ast.FunctionDef) and n.name in want: segs.append(ast.get_source_segment(src,n))",
+    "    if isinstance(n, ast.Assign):",
+    "        tgts=[t.id for t in n.targets if isinstance(t, ast.Name)]",
+    "        if any(t in want for t in tgts): segs.append(ast.get_source_segment(src,n))",
+    "ns={}",
+    "exec('from __future__ import annotations\\nimport os\\nfrom pathlib import Path\\nfrom typing import Any\\n' + '\\n\\n'.join(segs), ns)",
+    "assert '_resolve_config_path' in ns, 'BLOCKER 1 resolver _resolve_config_path missing'",
+    // The shipped guard predicate (accept iff the target equals the resolver output).
+    "def accepts(scope, target):",
+    "    resolved = Path(target).resolve()",
+    "    expected = ns['_resolve_config_path'](scope).resolve()",
+    "    return resolved == expected",
+    "proj = Path(tempfile.mkdtemp(prefix='ruth-wg-proj-'))",
+    "home = Path(tempfile.mkdtemp(prefix='ruth-wg-home-'))",
+    "ns['_project_root'] = lambda: proj",
+    "ns['_home'] = lambda: home",
+    "bad=[]",
+    // Case A: project on rutherford.toml (FIRST candidate). Resolver must pick it; guard must accept.
+    "(proj / 'rutherford.toml').write_text('x=1\\n', encoding='utf-8')",
+    "ta = ns['_resolve_config_path']('workspace')",
+    "if ta.name != 'rutherford.toml': bad.append('resolver did not pick rutherford.toml, got '+ta.name)",
+    "if not accepts('workspace', ta): bad.append('guard REJECTED resolver-produced rutherford.toml')",
+    // out-of-dir reject: a config.toml in the home dir is NOT the workspace resolver output.
+    "outside = home / 'config.toml'",
+    "outside.write_text('y=2\\n', encoding='utf-8')",
+    "if accepts('workspace', outside): bad.append('guard ACCEPTED an out-of-dir config.toml target')",
+    // traversal reject: a ../.. path is not the resolver output either.
+    "trav = proj / '..' / '..' / 'config.toml'",
+    "if accepts('workspace', trav): bad.append('guard ACCEPTED a ../.. traversal target')",
+    // Case B: switch project to .rutherford.toml (remove rutherford.toml so it is FIRST-existing).
+    "(proj / 'rutherford.toml').unlink()",
+    "(proj / '.rutherford.toml').write_text('z=3\\n', encoding='utf-8')",
+    "tb = ns['_resolve_config_path']('workspace')",
+    "if tb.name != '.rutherford.toml': bad.append('resolver did not pick .rutherford.toml, got '+tb.name)",
+    "if not accepts('workspace', tb): bad.append('guard REJECTED resolver-produced .rutherford.toml')",
+    "if bad:",
+    "    print('WRITE-GUARD FAILED: ' + json.dumps(bad)); sys.exit(3)",
+    "print('OK write-guard accepts rutherford.toml + .rutherford.toml, rejects out-of-dir + traversal')",
+  ].join("\n");
+
+  let out;
+  try {
+    out = execFileSync(py, ["-c", driver, routesPath], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    const msg = (e.stdout ? e.stdout.toString() : "") + (e.stderr ? e.stderr.toString() : "");
+    throw new Error(`write-guard driver failed:\n${msg.trim()}`);
+  }
+  if (!/^OK write-guard/m.test(out)) throw new Error(`unexpected driver output: ${out.trim()}`);
+
+  // SOURCE CONTRACT (source-level falsifiability): the config write handler's guard must key on
+  // resolver EQUALITY, not the hardcoded name literal. Isolate _handle_config_write and assert:
+  //   (a) it compares against `_resolve_config_path(scope).resolve()`, and
+  //   (b) it does NOT gate the config write on `resolved.name != "config.toml"`.
+  // Reverting the guard to the hardcoded name reintroduces (b) and drops (a) -> this FAILS.
+  const routesSrc = readFileSync(routesPath, "utf8");
+  const cwStart = routesSrc.indexOf("async def _handle_config_write");
+  if (cwStart === -1) throw new Error("could not locate _handle_config_write in routes.py");
+  const cwEnd = routesSrc.indexOf("\nasync def ", cwStart + 1);
+  const cwBody = routesSrc.slice(cwStart, cwEnd === -1 ? undefined : cwEnd);
+  if (!/_resolve_config_path\(scope\)\.resolve\(\)/.test(cwBody)) {
+    throw new Error("config write guard does not compare against _resolve_config_path(scope).resolve()");
+  }
+  if (/resolved\.name\s*!=\s*"config\.toml"/.test(cwBody)) {
+    throw new Error('config write guard still uses the hardcoded `resolved.name != "config.toml"` (BLOCKER 1 reverted)');
+  }
+});
+
+// (nn) WRITE-GUARD test is NON-VACUOUS (self-check of (mm)'s falsifiability):
+//      run the SAME real resolver but apply the PRE-FIX guard predicate — the hardcoded
+//      `resolved.name == "config.toml"` — to a resolver-produced rutherford.toml target, and confirm
+//      it REJECTS it. If the reverted predicate still accepted, (mm) would be vacuous.
+behaviorCase("(nn) write-guard test is falsifiable (reverting to hardcoded config.toml name rejects rutherford.toml)", () => {
+  const py = resolvePython();
+  if (!py) throw new Error("no Python interpreter found");
+  const routesPath = join(repoRoot, "backend", "routes.py");
+  const driver = [
+    "import ast, sys, tempfile",
+    "from pathlib import Path",
+    "src = open(sys.argv[1], encoding='utf-8').read()",
+    "want = {'_home','_project_root','_project_config_path','_global_config_path','_resolve_config_path','_global_config_dir_candidates','_global_config_dir','_PROJECT_CONFIG_CANDIDATES'}",
+    "mod = ast.parse(src)",
+    "segs=[]",
+    "for n in mod.body:",
+    "    if isinstance(n, ast.FunctionDef) and n.name in want: segs.append(ast.get_source_segment(src,n))",
+    "    if isinstance(n, ast.Assign):",
+    "        tgts=[t.id for t in n.targets if isinstance(t, ast.Name)]",
+    "        if any(t in want for t in tgts): segs.append(ast.get_source_segment(src,n))",
+    "ns={}",
+    "exec('from __future__ import annotations\\nimport os\\nfrom pathlib import Path\\nfrom typing import Any\\n' + '\\n\\n'.join(segs), ns)",
+    "proj = Path(tempfile.mkdtemp(prefix='ruth-wg-rev-'))",
+    "ns['_project_root'] = lambda: proj",
+    "ns['_home'] = lambda: proj",
+    "(proj / 'rutherford.toml').write_text('x=1\\n', encoding='utf-8')",
+    "target = ns['_resolve_config_path']('workspace')",
+    // PRE-FIX predicate: accept iff the resolved target is literally named config.toml.
+    "reverted_accepts = (target.resolve().name == 'config.toml')",
+    "print('REVERTED_ACCEPTS' if reverted_accepts else 'REVERTED_REJECTS')",
+  ].join("\n");
+  let out;
+  try {
+    out = execFileSync(py, ["-c", driver, routesPath], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    throw new Error("falsifiability driver errored: " + ((e.stdout || "") + (e.stderr || "")).toString());
+  }
+  if (!/REVERTED_REJECTS/.test(out)) {
+    throw new Error(
+      "the pre-fix hardcoded-name guard did NOT reject a rutherford.toml resolver target — (mm) would be vacuous. Output: " + out.trim(),
+    );
+  }
+});
+
 // --- report ---
 const total = passed + failed;
 if (failed) {

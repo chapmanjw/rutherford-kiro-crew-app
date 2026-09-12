@@ -4,28 +4,47 @@ All notable changes to this app are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-09-12
+
+The **editable Config UI** release. Rutherford's dashboard page grows from a read-only viewer into
+a full Config / Panels / Roles editor backed by safe, atomic writes.
 
 ### Added
 
-- **Config UI read layer completed.** `GET /config` and `GET /status` now surface structured
-  `[agents.*]` tables (`default_model`, `enabled`, per-agent `env`, plus any `extra` keys); `/status`
-  returns a resolved roster with per-agent models instead of only the flat `enabled_agents` list.
-- **`acp.json` folding.** Both the global (beside `config.toml`) and project (`<cwd>/.rutherford/acp.json`)
-  `agent_servers` are surfaced with a scope label and `{path, scope, platform, exists}`.
-- **`RUTHERFORD_*` env overrides** (`RUTHERFORD_CONFIG`, `_MAX_DEPTH`, `_MAX_TARGETS`, `_MAX_CONCURRENCY`,
-  `_DEFAULT_TIMEOUT_S`, `_DEFAULT_SAFETY`, `_TRUSTED_WORKSPACES`, `_ROLE_DIRS`) are reported when set;
-  `RUTHERFORD_CONFIG` is noted as replacing file discovery.
-- **Config write layer (first).** `PUT /config?scope=global|workspace` accepts a JSON body and writes it
-  as `config.toml`. Safety: the serialized TOML must re-parse before any disk write; the prior file is
-  snapshotted to a timestamped `.bak-YYYY-MM-DD`; the write is atomic (temp file in the same dir +
-  `os.replace`); only the resolved global/workspace `config.toml` path is ever written; path traversal is
-  rejected. Comment preservation is intentionally not attempted. GET routes stay read-only.
-- **Editable Config tab** (`ui/src/App.tsx`): `default_safety_mode`, `default_timeout_s`, `max_targets`,
-  `default_persistence`, `auto_detect_local_models`, `synthesize_default`, editable `enabled_agents` /
-  `trusted_workspaces` / `role_dirs` lists, and per-agent `[agents.*]` rows (id / default_model / enabled),
-  with a per-scope Save button that writes and re-fetches, and inline save success/error. Panels and roles
-  remain read-only (next step).
+- **Editable Config, Panels, and Roles tabs.** The Rutherford page (`ui/src/App.tsx`) now edits all
+  three surfaces, each with a per-scope (global / workspace) Save that writes and re-fetches, plus
+  inline save success/error state. Panels and Roles are no longer read-only.
+- **Backend routes.** `register_routes` (`backend/routes.py`) serves:
+  `GET /status`, `GET /rutherford-meta`, `GET`+`PUT /rutherford-config`, `GET /panels` +
+  `PUT /rutherford-panels`, and `GET`+`PUT /rutherford-roles`. Write routes deliberately use
+  NON-reserved paths because Kiro Crew reserves `/api/apps/<app>/config` for its own store.
+- **Meta-driven dropdowns with free-text fallback.** `GET /rutherford-meta` supplies the option sets
+  the UI renders (`agent_ids` = built-ins UNIONed with config-declared ids, `strategies`,
+  `safety_modes`, `persistence`, `roles`). An in-process backend route has no MCP client, so the
+  roster is built-ins + config (not a live probe) and every dropdown degrades to a free-text
+  datalist so a user can always type an id we did not enumerate.
+- **Centralized field help.** Field descriptions, required/optional markers, and each field's
+  absent-meaning are surfaced consistently across the editor.
+- **Honest configured-state reachability.** The Overview Reachability card reports what config
+  declares (which `config.toml` files exist, agents configured vs. in the effective roster) and
+  NEVER live-probes: `available` is always `false` from this read-only backend, with an honest note
+  that live per-agent connectivity is checked by running `doctor` in a Rutherford session.
+- **Safe atomic writes** for `config.toml`, `panels.toon`, and role `.md` files: a
+  parse/serialize/parse (or TOML re-parse) validation before touching disk, a timestamped `.bak`,
+  an atomic temp-file + `os.replace`, and traversal / out-of-directory rejection — the write target
+  always comes from the shared resolver, never the request.
+- **Inline-styled, theme-colored toggle** control for boolean settings.
+- **Overview intro** explaining that Rutherford is an MCP server driven by the
+  `rutherford-orchestrator` agent.
+
+### Changed
+
+- **Project-config write names accepted (ship-blocker fix).** The `PUT /rutherford-config` guard
+  previously hardcoded `config.toml`, so a user whose project config is `rutherford.toml` or
+  `.rutherford.toml` (both resolved by the GET read layer) could VIEW but never SAVE. The guard now
+  asserts the write target EQUALS the shared resolver's output (`_resolve_config_path(scope)`), so
+  GET and PUT agree on all three project-config names while still rejecting any out-of-directory or
+  traversal target the resolver can never produce.
 
 ## [1.0.0] - 2026-09-09
 
@@ -52,4 +71,5 @@ Kiro Crew app format.
   install from a local checkout (`git clone` then `kirocrew app install <path>`) — both behind a trust
   grant.
 
+[2.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.0.0
 [1.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v1.0.0
