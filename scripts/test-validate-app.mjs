@@ -799,7 +799,14 @@ behaviorCase("(kk) reachability note is honest: available=false + placeholder-fr
     "segs=[ast.get_source_segment(src,n) for n in ast.parse(src).body if isinstance(n,ast.FunctionDef) and n.name in want]",
     "assert segs, 'FIX target _reachability_note missing from routes.py'",
     "ns={}",
-    "exec('from typing import Any\\n' + '\\n\\n'.join(segs), ns)",
+    // The helper has Path-annotated params (g_path: Path, ...) and dict/list/Any
+    // annotations. Without `from __future__ import annotations` those annotations
+    // are EVALUATED at def-time, so Path/Any must be importable or def raises
+    // NameError before the helper is ever callable. Make annotations lazy AND
+    // import the names the body genuinely uses (Path is only in annotations here;
+    // Any/dict/list are builtins-or-typing). `from __future__` MUST be first.
+    "preamble='from __future__ import annotations\\nfrom pathlib import Path\\nfrom typing import Any\\n'",
+    "exec(preamble + '\\n\\n'.join(segs), ns)",
     "fn=ns['_reachability_note']",
     // Duck-typed Path stub exposing only .exists().
     "class P:",
@@ -855,7 +862,10 @@ behaviorCase("(ll) reachability test is falsifiable (reverting to available:true
     "src = open(sys.argv[1], encoding='utf-8').read()",
     "segs=[ast.get_source_segment(src,n) for n in ast.parse(src).body if isinstance(n,ast.FunctionDef) and n.name=='_reachability_note']",
     "ns={}",
-    "exec('from typing import Any\\n' + '\\n\\n'.join(segs), ns)",
+    // Same lazy-annotations + real imports as (kk): the Path-annotated params
+    // would otherwise NameError at def-time before the helper is callable.
+    "preamble='from __future__ import annotations\\nfrom pathlib import Path\\nfrom typing import Any\\n'",
+    "exec(preamble + '\\n\\n'.join(segs), ns)",
     "fn=ns['_reachability_note']",
     "class P:",
     "    def __init__(self, e): self._e=e",
