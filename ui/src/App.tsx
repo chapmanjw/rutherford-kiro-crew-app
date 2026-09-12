@@ -603,6 +603,40 @@ function StatusView({ status }: { status: StatusResp | null }) {
   const envKeys = Object.keys(status.env_overrides || {}).filter((k) => k !== '_note')
   return (
     <>
+      <Card>
+        <CardTitle>What is Rutherford?</CardTitle>
+        <p className="text-sm text-muted mt-1">
+          A Kiro Crew app that drives external ACP coding agents (Claude Code, Codex, and
+          others) for multi-agent <strong>delegation, consensus, debate, review, and
+          planning</strong> — read-only by default.
+        </p>
+        <p className="text-sm text-muted mt-2">
+          <strong>Setup:</strong> run <code className="text-xs">rutherford doctor</code> — a
+          real read-only per-agent health check that confirms your crew is installed and
+          answering. If nothing is installed yet, the setup-rutherford flow /{' '}
+          <code className="text-xs">rutherford setup</code> scaffolds config.
+        </p>
+        <p className="text-sm text-muted mt-2">
+          <strong>Two ways to configure it:</strong>
+        </p>
+        <ul className="text-sm text-muted mt-1" style={{ paddingLeft: 18, listStyle: 'disc' }}>
+          <li style={{ marginTop: 2 }}>
+            <strong>Manual</strong> — use the <strong>Config</strong>, <strong>Panels</strong>,
+            and <strong>Roles</strong> tabs in this app to edit Rutherford's configuration
+            directly (global or workspace <code className="text-xs">config.toml</code>,{' '}
+            <code className="text-xs">panels.toon</code>, role files).
+          </li>
+          <li style={{ marginTop: 4 }}>
+            <strong>Conversational</strong> — or just talk to Rutherford in a Kiro Crew session
+            using the <code className="text-xs">rutherford-orchestrator</code> agent. It routes
+            your request to the right mode (delegate / consensus / debate / review / plan) and
+            can configure Rutherford for you.
+          </li>
+        </ul>
+      </Card>
+
+      <div className="h-3" />
+
       <div className="grid gap-3.5 grid-cols-[repeat(auto-fit,minmax(150px,1fr))] mb-6">
         <StatCard label="Platform" value={status.platform} />
         <StatCard label="Agents enabled" value={rosterValue} accent />
@@ -918,7 +952,7 @@ function Switch({
         style={{
           position: 'absolute',
           top: 2,
-          left: value ? 22 : 2,
+          left: value ? 20 : 2,
           width: 16,
           height: 16,
           borderRadius: 9999,
