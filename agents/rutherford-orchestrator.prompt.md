@@ -47,10 +47,13 @@ Read what the user actually wants, then map it. The mode names double as the cla
 | Argue a tradeoff, stress-test a decision | `debate` | Needs `targets` with at least two agents. Set `rounds` (default 2). |
 | Review a diff or a set of changed files | `review` | Pass `diff` or `paths`. This is the read-only `code-review-panel` shape under the reviewer persona. |
 | Design an approach before building | `plan` | One agent under the architect persona; pass `cli` and `goal`. Read-only by construction. |
+| Native panel / Kiro-hosted models only | `native-panel` skill | When the user names a native panel, asks to run it natively/in Kiro/without external CLIs, OR all requested seats are Kiro-spawnable models (not CLI ids). Route to the native-panel skill. No @rutherford:rutherford call. |
 
 For a long-running Rutherford call, **wrap it in a `spawn_run` subagent** rather than using `mode="async"`. A subagent holds the Rutherford call synchronously inside its own session: Kiro Crew sees the subagent complete and delivers the result as a `[Subagent completion event]` — so you know exactly when the job is done without polling. `mode="async"` fires the job into Rutherford's background job queue and hands you a `job_id` back immediately; Kiro Crew has no visibility into that queue, so you will not know the job finished until the user asks, at which point you must `job_status` / `job_result` / `activity` to recover the answer. Reserve `mode="async"` only when the user explicitly wants a fire-and-forget job they will manage themselves via those tools.
 
 When the intent is genuinely mixed, prefer the cheapest mode that answers the real question, and say why you chose it.
+
+**No mixed mode on a panel.** Never split one panel across engines. If any requested seat is a Rutherford ACP CLI id (`claude_code`, `codex`, `cursor`, `kiro`, etc.) the WHOLE panel runs MCP (`consensus` / `debate` / `review`). If all seats are Kiro-spawnable model names (not CLI ids), the WHOLE panel runs native via the `native-panel` skill. When it is ambiguous whether a seat names a model or a CLI, ask the user rather than guessing an engine.
 
 ## Defaults and honesty about writes
 
@@ -93,10 +96,12 @@ Ground every tool name and argument in the bundled reference before you call:
 - `~/.kiro/crew/apps/rutherford/reference/tools.md` — the exact tool surface, arguments, defaults.
 - `~/.kiro/crew/apps/rutherford/reference/safety.md` — the four modes, the trust gate, the sandbox.
 - `~/.kiro/crew/apps/rutherford/reference/panels.md` — saved crews and the `panel` argument.
+- `~/.kiro/crew/apps/rutherford/reference/native-panels.md` — the all-native panel engine and `native-panels.toon` schema.
+- `~/.kiro/crew/apps/rutherford/reference/roles-native.md` — the ported built-in role prompt text native seats use.
 - `~/.kiro/crew/apps/rutherford/reference/config.md` — roster, defaults, roles.
 
 Skills you can lean on once you've picked a mode: `delegate-task`, `multi-agent-consensus`,
-`agent-debate`, `code-review-panel`, `safe-write-delegation`, `background-jobs`, `add-agents`,
+`agent-debate`, `code-review-panel`, `native-panel`, `safe-write-delegation`, `background-jobs`, `add-agents`,
 `configure-panels`, `configure-defaults`, `configure-roles`, `configure-permissions`,
 `setup-rutherford`, `troubleshoot-connection`. There is no separate plan skill — drive the `plan` tool
 directly.

@@ -553,6 +553,48 @@ function enforceBackendRouteContract() {
   }
 }
 
+/**
+ * F6 — native-panels (v3.0.0) asset guard.
+ *
+ * v3 adds an all-native panel engine: a panel runs entirely inside Kiro Crew as `spawn_run` subagents
+ * (no external ACP CLI launch), driven by the `native-panel` skill. Its author-facing surface is four
+ * bundled files, and the skill + orchestrator prompt cite the two reference docs by their INSTALLED
+ * path (`~/.kiro/crew/apps/rutherford/reference/native-panels.md` / `roles-native.md`) — those live-ref
+ * citations are already checked by the LIVE_REF pass below, so a missing reference doc fails there too.
+ * This guard asserts the four assets exist up front (a clearer, single diagnostic) and that the example
+ * file is a real native-panels file:
+ *   - examples/native-panels.toon exists AND has a top-level `native-panels:` key (not `panels:`),
+ *   - reference/native-panels.md exists,
+ *   - reference/roles-native.md exists,
+ *   - skills/native-panel/SKILL.md exists (the executor skill).
+ * Dependency-free (existence + a top-level-key text scan).
+ */
+function validateNativePanelsAssets() {
+  const exampleRel = "examples/native-panels.toon";
+  const examplePath = join(root, exampleRel);
+  if (!existsSync(examplePath)) {
+    fail(`missing file: ${exampleRel} (the v3 native-panels starter)`);
+  } else {
+    const text = readFileSync(examplePath, "utf8");
+    // The top-level key MUST be `native-panels:` — Rutherford's panels.toon loader rejects the keys a
+    // native panel adds (engine/agent/reduction), so native panels live under their own top-level key.
+    if (!/^native-panels:\s*$/m.test(text)) {
+      fail(`${exampleRel}: must have a top-level "native-panels:" key (native panels do not go in panels.toon)`);
+    }
+  }
+
+  for (const rel of ["reference/native-panels.md", "reference/roles-native.md"]) {
+    if (!existsSync(join(root, rel))) {
+      fail(`missing file: ${rel} (v3 native-panels reference doc)`);
+    }
+  }
+
+  const skillRel = "skills/native-panel/SKILL.md";
+  if (!existsSync(join(root, skillRel))) {
+    fail(`missing file: ${skillRel} (the native-panel executor skill)`);
+  }
+}
+
 // Regression guard for the orchestrator's implementation-spawn directive (F2). Runs unconditionally
 // (it does its own existence check on the prompt file) so it fires even if app.json is malformed.
 enforceImplementationAgentDirective();
@@ -561,6 +603,11 @@ enforceImplementationAgentDirective();
 // non-reserved paths and never collide with Kiro Crew's reserved /config. Runs unconditionally
 // (its own existence check on backend/routes.py).
 enforceBackendRouteContract();
+
+// Native-panels asset guard (F6): the v3 native-panel skill, its two reference docs, and the example
+// native-panels.toon must all exist, and the example must use the `native-panels:` top-level key. Runs
+// unconditionally (its own existence checks).
+validateNativePanelsAssets();
 
 // Validate the self-listing external-registry index (F3). Runs unconditionally (its own existence
 // check) so it fires even if app.json is malformed; the self-listing name match is skipped when

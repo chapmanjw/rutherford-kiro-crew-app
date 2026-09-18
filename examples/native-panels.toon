@@ -1,0 +1,43 @@
+native-panels:
+  fast-review:
+    description: Three Kiro-hosted models review independently, majority verdict.
+    engine: native
+    strategy: majority
+    targets[3]:
+      - model: claude-sonnet-4.5
+        role: principal-reviewer
+        label: sonnet
+      - model: gpt-5.6
+        role: principal-reviewer
+        label: gpt
+      - model: deepseek-3.2
+        role: principal-reviewer
+        label: deepseek
+  design-roundtable:
+    description: Three architects weigh a design question from independent angles.
+    engine: native
+    strategy: all-voices
+    targets[3]:
+      - model: claude-sonnet-4.5
+        role: architect
+        label: claude
+      - model: gpt-5.6
+        role: architect
+        label: gpt
+      - model: deepseek-3.2
+        role: architect
+        label: deepseek
+  ship-vote:
+    description: Ship/no-ship majority vote. Each voice returns a verdict.
+    engine: native
+    strategy: majority
+    targets[3]:
+      - model: claude-sonnet-4.5
+        role: principal-reviewer
+        label: claude
+      - model: gpt-5.6
+        role: principal-reviewer
+        label: gpt
+      - model: deepseek-3.2
+        role: principal-reviewer
+        label: deepseek

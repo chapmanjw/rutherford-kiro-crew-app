@@ -4,6 +4,25 @@ All notable changes to this app are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-09-18
+
+### Added
+- **Native Kiro panel engine** — run a Rutherford panel entirely within Kiro Crew as subagents (no external ACP CLI launches). Define panels in `~/.rutherford/native-panels.toon`; set `engine: native` on a panel to route it through `spawn_run` instead of the Rutherford MCP server.
+- **All 7 strategies ported natively**: `all-voices`, `unanimous`, `majority`, `plurality`, `weighted`, `parity-pair`, and `rank` (two-round Borda). Deterministic vote math via a scratch scorer script.
+- **Native debate** via `spawn_run(keep=true)` + `spawn_continue` across rounds with `track_convergence` support.
+- **`skills/native-panel`** — new orchestrator skill covering the full native lifecycle: resolve, validate, fan-out, collect, reduce, report.
+- **`reference/native-panels.md`** — schema reference for `native-panels.toon`.
+- **`reference/roles-native.md`** — ported built-in role prompt text for native seats (principal-reviewer, architect, and others).
+- **`examples/native-panels.toon`** — ready-to-copy starter panels.
+- **`backend/native_panels.py`** — round-trip-safe TOON serializer/parser for `native-panels.toon`.
+
+### Changed
+- `agents/rutherford-orchestrator.prompt.md` — native-panel routing rule and no-mixed-mode guard added.
+
+### Not changed
+- Existing MCP path (`panels.toon`, `reload_panels`, `consensus`/`debate`/`review` tools) is untouched. Native is purely additive.
+- `discount_correlated` remains MCP-only (no native analogue in v3).
+
 ## [2.2.0] - 2026-09-18
 
 ### Changed
