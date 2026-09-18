@@ -4,6 +4,11 @@ All notable changes to this app are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-18
+
+### Changed
+- Orchestrator prompt: long-running Rutherford calls should now be wrapped in a `spawn_run` subagent instead of using `mode="async"`. A subagent holds the call synchronously and delivers the result as a Kiro Crew completion event, so the orchestrator knows when work finishes without polling. `mode="async"` is now reserved for explicit user-requested fire-and-forget jobs.
+
 ## [2.1.0] - 2026-09-18
 
 ### Changed
@@ -87,6 +92,7 @@ Kiro Crew app format.
   install from a local checkout (`git clone` then `kirocrew app install <path>`) — both behind a trust
   grant.
 
+[2.2.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.2.0
 [2.1.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.1.0
 [2.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.0.0
 [1.0.1]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v1.0.1
