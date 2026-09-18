@@ -23,6 +23,7 @@
 
 # Node — the validation script is Node; no dependencies are committed
 node_modules/
+.npm-cache/
 
 # Editor / OS noise and logs
 .DS_Store
@@ -31,3 +32,6 @@ Thumbs.db
 *.log
 .idea/
 .vscode/
+
+# Python
+backend/__pycache__/
