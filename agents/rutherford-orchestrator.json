@@ -6,8 +6,10 @@
   "prompt": "file://~/.kiro/crew/apps/rutherford/agents/rutherford-orchestrator.prompt.md",
   "tools": [
     "fs_read",
+    "fs_write",
     "grep",
     "glob",
+    "execute_bash",
     "@rutherford:rutherford",
     "@kirocrew-core"
   ],

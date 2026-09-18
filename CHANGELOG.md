@@ -4,6 +4,12 @@ All notable changes to this app are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-09-18
+
+### Changed
+- `rutherford-orchestrator` agent is now write-capable: `fs_write` and `execute_bash` added to its tool grants, matching the default `kirocrew` agent's capability. `allowedTools` is unchanged — both tools remain runtime-gated (not auto-approved), preserving the same approval posture as the default agent.
+- Updated orchestrator prompt to reflect the agent's expanded toolset and remove inaccurate read-only self-descriptions.
+
 ## [2.0.0] - 2026-09-12
 
 The **editable Config UI** release. Rutherford's dashboard page grows from a read-only viewer into
@@ -81,6 +87,7 @@ Kiro Crew app format.
   install from a local checkout (`git clone` then `kirocrew app install <path>`) — both behind a trust
   grant.
 
+[2.1.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.1.0
 [2.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.0.0
 [1.0.1]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v1.0.1
 [1.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v1.0.0
