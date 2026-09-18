@@ -70,11 +70,12 @@ CLI, ASK — do not guess an engine.
 
 ## Step 1 — Resolve the panel
 
-Read `native-panels.toon` from the closest applicable scope, in this precedence (closest wins):
+Read `native-panels.toon` across the same three scopes as `panels.toon`, listed lowest precedence
+first. Panels merge by name; the highest-precedence scope wins for a same-named panel:
 
-1. project `<cwd>/.rutherford/native-panels.toon`,
-2. home `~/.rutherford/native-panels.toon`,
-3. `$RUTHERFORD_CONFIG_DIR/native-panels.toon`.
+1. home `~/.rutherford/native-panels.toon` — the global, per-user store (lowest).
+2. project `<cwd>/.rutherford/native-panels.toon` — overrides home for a same-named panel.
+3. `$RUTHERFORD_CONFIG_DIR/native-panels.toon` — an explicit directory; overrides both (highest).
 
 Parse it (the strict TOON parser in `backend/native_panels.py` is the reference implementation). If the
 named panel does not exist, STOP with a clear error that lists what IS available:

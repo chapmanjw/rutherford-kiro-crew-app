@@ -243,10 +243,12 @@ def parse(text: str) -> list[dict[str, Any]]:
 
     Each panel: ``{name, description, engine, strategy, reduction, targets:[...]}``
     with keys present only when set (``targets`` always present). Seats preserve
-    key order. Raises ``ValueError`` on: an unknown panel or seat key, a missing
-    ``model``, an ``engine`` other than ``native``, an unknown ``strategy`` /
-    ``stance``, a negative or non-numeric ``weight``, a non-bool ``parity``, an
-    empty ``targets`` list, or any structurally malformed line — so a write never
+    key order. Raises ``ValueError`` on: a PRESENT file missing its top-level
+    ``native-panels:`` table (a typo'd root reads as a config error, never as an
+    empty config), an unknown panel or seat key, a missing ``model``, an
+    ``engine`` other than ``native``, an unknown ``strategy`` / ``stance``, a
+    negative or non-numeric ``weight``, a non-bool ``parity``, an empty
+    ``targets`` list, or any structurally malformed line — so a write never
     proceeds over a shape the round-trip cannot faithfully reproduce.
     """
     panels: list[dict[str, Any]] = []
@@ -328,6 +330,18 @@ def parse(text: str) -> list[dict[str, Any]]:
             continue
 
         raise _panel_error(name, f"unexpected line {raw!r}")
+
+    if not in_root:
+        # A PRESENT file that never declares the `native-panels:` root table is a
+        # config error, not an empty config — a typo like `native-panel:` or an
+        # unrelated file must fail loudly here rather than read as "no panels" and
+        # resurface downstream as a misleading "panel not found". (Discovery skips
+        # a genuinely absent file BEFORE calling parse, so this only fires on a
+        # file that exists but is missing its root.)
+        raise ValueError(
+            "missing required top-level 'native-panels:' table — "
+            "is the root key spelled correctly (e.g. not 'native-panel:')?"
+        )
 
     if current is not None:
         _finalize_panel(current)
