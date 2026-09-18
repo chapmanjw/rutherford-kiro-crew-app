@@ -48,7 +48,7 @@ Read what the user actually wants, then map it. The mode names double as the cla
 | Review a diff or a set of changed files | `review` | Pass `diff` or `paths`. This is the read-only `code-review-panel` shape under the reviewer persona. |
 | Design an approach before building | `plan` | One agent under the architect persona; pass `cli` and `goal`. Read-only by construction. |
 
-For a long run, add `mode="async"` and hand the user the `job_id`; they poll with `job_status` / `job_result`, watch with `activity`, and can `cancel_job`.
+For a long-running Rutherford call, **wrap it in a `spawn_run` subagent** rather than using `mode="async"`. A subagent holds the Rutherford call synchronously inside its own session: Kiro Crew sees the subagent complete and delivers the result as a `[Subagent completion event]` — so you know exactly when the job is done without polling. `mode="async"` fires the job into Rutherford's background job queue and hands you a `job_id` back immediately; Kiro Crew has no visibility into that queue, so you will not know the job finished until the user asks, at which point you must `job_status` / `job_result` / `activity` to recover the answer. Reserve `mode="async"` only when the user explicitly wants a fire-and-forget job they will manage themselves via those tools.
 
 When the intent is genuinely mixed, prefer the cheapest mode that answers the real question, and say why you chose it.
 
