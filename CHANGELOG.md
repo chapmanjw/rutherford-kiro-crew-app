@@ -19,7 +19,7 @@ All notable changes to this app are documented here. The format follows
 
 ### Not changed
 - The existing MCP path is fully preserved and untouched: `panels.toon`, `reload_panels`, and the `consensus`, `debate`, `review`, `delegate`, and `plan` tools behave exactly as before. Native is purely additive.
-- `discount_correlated` remains MCP-only. Native seats are all Kiro-hosted models, so lineage discounting does not apply.
+- `discount_correlated` is not implemented on the native path in v3; it remains available on the MCP path.
 
 ## [2.2.0] - 2026-09-18
 
