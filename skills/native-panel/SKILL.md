@@ -125,17 +125,29 @@ For each seat, assemble the task text the subagent receives, in this order:
 
 ## Step 4 — Fan out
 
-Spawn one subagent per seat with `spawn_run` (on `@kirocrew-core`), all seats concurrently:
+Spawn **one `spawn_run` call per seat** (on `@kirocrew-core`) — one call each, not a single batched
+`tasks[]` call. Each per-seat call carries:
 
-- `tasks[]` — one entry per seat, the full task text from Step 3.
-- per-seat model override — `model=<seat.model>`.
+- `task` — that seat's full task text from Step 3.
+- `model=<seat.model>` — this is exactly why per-seat models require per-seat calls: `spawn_run` takes one
+  `model` per call, so a seat's model can only be set on a call dedicated to that seat.
 - `include_memory=false` for every seat, so each voice answers independently with no leakage from this
   conversation.
 - `agent=<seat.agent>` when the seat sets one, else `agent="kirocrew"` (the default full-toolset worker).
   Never leave the agent unnamed — an unnamed spawn inherits the read-only router and cannot do the work.
 - `max_turns=8` — seats are bounded deliberation, not open-ended work.
 
-Then STOP and wait for the completion events; do not keep working in the same turn.
+Issue all the per-seat `spawn_run` calls in the SAME turn so they run concurrently: the runtime fans them
+out in parallel and delivers one completion event per seat. Then STOP and wait for ALL completion events
+before reducing; do not keep working in the same turn.
+
+**Do NOT use a single `spawn_run` with a `tasks[]` array for a multi-model panel** — `spawn_run` takes one
+`model` per call, so a batched `tasks[]` call would force every seat onto the same model. (A `tasks[]`
+batch has a per-task `agents[]` list but NO per-task `models[]` list, so it cannot carry per-seat models.)
+One call per seat is what gives each seat its own model.
+
+If (and only if) every seat in the panel happens to share the SAME model, a single `tasks[]` batch call is
+an acceptable optimization — but per-seat calls are always correct, so lead with those.
 
 ## Step 5 — Collect
 
@@ -178,9 +190,10 @@ fine and avoids arithmetic slips.
 
 - **rank (two-round Borda)** —
   - Round 1: the seats' Step 4 answers.
-  - Round 2: for each seat, spawn a NEW `spawn_run` (same `model`, `include_memory=false`) that shows it
-    the OTHER seats' answers anonymized (`Answer A: …`, `Answer B: …`, self-excluded) and asks it to rank
-    them best-to-worst. Parse each ranking.
+  - Round 2: for each seat, spawn a NEW `spawn_run` — one call per seat carrying that seat's own `model`
+    (not a batched `tasks[]` call, which cannot carry per-seat models), `include_memory=false` — that shows
+    it the OTHER seats' answers anonymized (`Answer A: …`, `Answer B: …`, self-excluded) and asks it to
+    rank them best-to-worst. Parse each ranking.
   - Aggregate with Borda scores (rank 1 = N−1 points, rank 2 = N−2, …), summed per answer. Report the
     leaderboard plus a pairwise agreement matrix (what % of rankers preferred A over B).
 
@@ -198,9 +211,10 @@ Report honestly: if a seat failed or a quorum was missed, say so plainly.
 
 ## Native debate (multi-round)
 
-For a native debate — several voices arguing across rounds — use `spawn_run(keep=true)` to open each
-voice's durable session in round one, then `spawn_continue` on each session for later rounds, showing each
-voice the others' latest positions and asking it to revise. This mirrors the MCP `debate` protocol
+For a native debate — several voices arguing across rounds — open each voice's durable session in round
+one with its OWN `spawn_run(keep=true, model=<seat.model>)` — one call per voice, exactly as in Step 4,
+because a batched `tasks[]` call cannot carry per-seat models — then `spawn_continue` on each session for
+later rounds, showing each voice the others' latest positions and asking it to revise. This mirrors the MCP `debate` protocol
 (persistent sessions, one independent round then cross-review rounds). Support `track_convergence` by
 asking each voice for a one-word verdict each round and stopping early when the panel converges (a
 unanimous verdict) or stalls (the verdict holds across rounds). Reduce and report as in Steps 6–7.
