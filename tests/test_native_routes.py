@@ -299,6 +299,51 @@ def test_failed_write_does_not_report_success_and_no_traceback_leak():
             check("no absolute scope path leaked", str(home) not in serialized)
 
 
+def test_reread_failure_does_not_report_success_and_no_traceback_leak():
+    # The write SUCCEEDS (file lands), but the POST-WRITE reread/parse the handler
+    # does to verify persistence fails. That must NOT be reported as a saved panel:
+    # no 200, no written=true, and no filesystem path from the exception may leak.
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as c:
+        home, cwd = Path(h), Path(c)
+        file = home / ".rutherford" / "native-panels.toon"
+        with scopes(home, cwd):
+            orig_write = native_panels.atomic_write
+            orig_parse = native_panels.parse
+
+            def write_then_break_reread(path, panels):
+                # Real write: the file genuinely lands and passes its own internal
+                # round-trip (which uses the real parse) before we poison anything.
+                orig_write(path, panels)
+
+                # Now poison ONLY the subsequent reread the route performs next.
+                def broken_parse(text):
+                    raise OSError(f"cannot read {path}")
+
+                native_panels.parse = broken_parse  # type: ignore[assignment]
+
+            native_panels.atomic_write = write_then_break_reread  # type: ignore[assignment]
+            try:
+                resp = put_panels("global", {"panels": [_panel()]})
+            finally:
+                native_panels.atomic_write = orig_write  # type: ignore[assignment]
+                native_panels.parse = orig_parse  # type: ignore[assignment]
+
+            check("reread failure -> non-200", resp.status != 200)
+            check("reread failure -> 500", resp.status == 500)
+            check(
+                "reread failure does not report written=true",
+                resp.body.get("written") is not True,
+            )
+            check("reread failure returns a correlation id", bool(resp.body.get("error_id")))
+            # The write actually landed even though the verify reread failed.
+            check("file landed on disk despite reread failure", file.is_file())
+            # The OSError message embedded the absolute path — it must not cross the wire.
+            serialized = repr(resp.body)
+            check("no 'traceback' key leaked (reread)", "traceback" not in resp.body)
+            check("no 'Traceback' string leaked (reread)", "Traceback" not in serialized)
+            check("no absolute scope path leaked (reread)", str(home) not in serialized)
+
+
 def main() -> int:
     for fn in (
         test_valid_roundtrip_global,
@@ -306,6 +351,7 @@ def main() -> int:
         test_dedup_when_home_equals_cwd,
         test_invalid_bodies_rejected_and_no_write,
         test_failed_write_does_not_report_success_and_no_traceback_leak,
+        test_reread_failure_does_not_report_success_and_no_traceback_leak,
     ):
         fn()
     total = _passed + _failed

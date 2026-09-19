@@ -1535,13 +1535,23 @@ async def _handle_native_panels_write(request: web.Request, ctx: AppContext) -> 
             # An OSError message can embed an absolute path — don't leak it.
             return _server_error(exc, "PUT /rutherford-native-panels (write)")
 
-        meta = _meta(path, scope)
-        payload: dict[str, Any] = {**meta, "written": True, "panels": []}
+        # Verify the write actually landed BEFORE reporting success: reread the
+        # file from disk and parse it. A successful reread is what proves the
+        # panels persisted, so ``written: true`` is set only AFTER it succeeds —
+        # never before. If the reread or parse fails, surface a server error (no
+        # 200/written:true), routed through _server_error so no filesystem path
+        # from the OSError/ValueError ever reaches the client.
         try:
             parsed = native_panels.parse(path.read_text(encoding="utf-8"))
-            payload["panels"] = [_native_panel_view(p) for p in parsed]
         except (OSError, ValueError) as exc:
-            payload["error"] = f"{type(exc).__name__}: {exc}"
+            return _server_error(exc, "PUT /rutherford-native-panels (reread)")
+
+        meta = _meta(path, scope)
+        payload: dict[str, Any] = {
+            **meta,
+            "written": True,
+            "panels": [_native_panel_view(p) for p in parsed],
+        }
         return web.json_response(payload)
     except Exception as exc:  # noqa: BLE001 — surface swallowed errors
         return _server_error(exc, "PUT /rutherford-native-panels")
