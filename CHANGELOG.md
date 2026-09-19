@@ -7,21 +7,19 @@ All notable changes to this app are documented here. The format follows
 ## [3.0.0] - 2026-09-18
 
 ### Added
-- **Native Kiro panel engine** — run a Rutherford panel entirely within Kiro Crew as subagents (no external ACP CLI launches). Define panels in `~/.rutherford/native-panels.toon`; set `engine: native` on a panel to route it through `spawn_run` instead of the Rutherford MCP server.
-- **All 7 strategies ported natively**: `all-voices`, `unanimous`, `majority`, `plurality`, `weighted`, `parity-pair`, and `rank` (two-round Borda). Deterministic vote math via a scratch scorer script.
-- **Native debate** via `spawn_run(keep=true)` + `spawn_continue` across rounds with `track_convergence` support.
-- **`skills/native-panel`** — new orchestrator skill covering the full native lifecycle: resolve, validate, fan-out, collect, reduce, report.
-- **`reference/native-panels.md`** — schema reference for `native-panels.toon`.
-- **`reference/roles-native.md`** — ported built-in role prompt text for native seats (principal-reviewer, architect, and others).
-- **`examples/native-panels.toon`** — ready-to-copy starter panels.
-- **`backend/native_panels.py`** — round-trip-safe TOON serializer/parser for `native-panels.toon`.
+- Native Kiro panel engine — run a whole Rutherford panel inside Kiro Crew as `spawn_run` subagents, one model per seat, with no external ACP CLI launches and no Rutherford MCP call anywhere on the native path. Opt in per panel by setting `engine: native`.
+- Native panels live in their own `native-panels.toon` store, kept separate from the MCP `panels.toon`. It is discovered across `~/.rutherford/`, `<cwd>/.rutherford/`, and `$RUTHERFORD_CONFIG_DIR`, with the highest-precedence scope winning.
+- All seven aggregation strategies run natively: `all-voices`, `unanimous`, `majority`, `plurality`, `weighted`, `parity-pair`, and `rank` (a two-round anonymized Borda count with a pairwise agreement matrix). Vote math is computed deterministically.
+- Native multi-round debate: each seat opens as a durable session and is continued across rounds, cross-pollinating the other seats' positions, with convergence and stall detection.
+- New `native-panel` skill that walks the orchestrator through the full lifecycle — resolve, validate, fan-out, collect, reduce, report — with strict author-time validation. An unknown model, unknown role, bad strategy, or non-native engine each fails clearly, with no silent fallback to the MCP path.
+- `backend/native_panels.py`, a strict, round-trip-safe TOON serializer and parser for `native-panels.toon` (timestamped `.bak`, atomic write, and a path-traversal guard); `reference/native-panels.md`, the schema reference; `reference/roles-native.md`, the built-in role prompts ported for native seats; and `examples/native-panels.toon`, a set of starter panels.
 
 ### Changed
-- `agents/rutherford-orchestrator.prompt.md` — native-panel routing rule and no-mixed-mode guard added.
+- `agents/rutherford-orchestrator.prompt.md` — adds the native-panel routing rule and an explicit no-mixed-mode guard: a panel is either entirely native or entirely MCP, and any ACP CLI seat forces the whole panel onto the MCP path.
 
 ### Not changed
-- Existing MCP path (`panels.toon`, `reload_panels`, `consensus`/`debate`/`review` tools) is untouched. Native is purely additive.
-- `discount_correlated` remains MCP-only (no native analogue in v3).
+- The existing MCP path is fully preserved and untouched: `panels.toon`, `reload_panels`, and the `consensus`, `debate`, `review`, `delegate`, and `plan` tools behave exactly as before. Native is purely additive.
+- `discount_correlated` remains MCP-only. Native seats are all Kiro-hosted models, so lineage discounting does not apply.
 
 ## [2.2.0] - 2026-09-18
 
