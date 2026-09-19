@@ -34,10 +34,10 @@ native-panels:
     engine: native
     strategy: majority
     targets[3]:
-      - model: claude-sonnet-4.5
+      - model: claude-sonnet-5
         role: principal-reviewer
         label: sonnet
-      - model: gpt-5.6
+      - model: gpt-5.6-luna
         role: principal-reviewer
         label: gpt
       - model: deepseek-3.2
