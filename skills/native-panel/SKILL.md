@@ -162,10 +162,13 @@ not an aborted panel.
 
 ## Step 6 — Reduce by strategy
 
-Apply the panel's `strategy` exactly. For every collapsing strategy, if the count of parseable voices is
-below `min_quorum` (default 1), report `NO_QUORUM: only N parseable voices out of M seats` instead of a
-verdict. Do the vote math deterministically — a small scratch scorer script over the extracted tokens is
-fine and avoids arithmetic slips.
+Apply the panel's `strategy` exactly. `min_quorum`, `require_dissent`, `synthesize`, and
+`track_convergence` are request-time options you apply here with the defaults below — they are NOT keys in
+`native-panels.toon` (the strict parser rejects them), so read them from the user's prompt, not the panel
+file. Only the `strategy` and each seat's `stance` come from the file. For every collapsing strategy, if
+the count of parseable voices is below `min_quorum` (default 1), report `NO_QUORUM: only N parseable voices
+out of M seats` instead of a verdict. Do the vote math deterministically — a small scratch scorer script
+over the extracted tokens is fine and avoids arithmetic slips.
 
 - **all-voices** — return every seat's full answer, labeled by `label` (or `model` if no label). No vote.
   If `synthesize` is requested, run ONE more `spawn_run` asking the judge model to synthesize the voices

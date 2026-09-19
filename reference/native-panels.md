@@ -25,7 +25,9 @@ format `panels.toon` uses.
 
 The file has one top-level `native-panels` table. Each key under it is a panel name. A panel carries
 `description`, `engine`, `strategy`, `reduction`, and `targets`. Any other key is a validation error
-reported at author time.
+reported at author time — including the run-time options in
+[Run-time options](#run-time-options-not-stored-in-native-panelstoon), which are passed in the request,
+not stored in the file.
 
 ```toon
 native-panels:
@@ -95,6 +97,23 @@ All seven `panels.toon` strategies are ported. The native skill runs the same vo
 | `parity-pair` | Split seats into `parity` counterweights and the rest; each group votes by simple majority; report both and whether they agree. |
 | `rank` | Two-round Borda: seats answer, then rank the others' answers (anonymized, self-excluded); aggregate to a leaderboard plus a pairwise agreement matrix. |
 
+## Run-time options (not stored in native-panels.toon)
+
+Four options steer how the `native-panel` skill runs and reduces a panel, but they are NOT panel-file
+keys. Writing any of them into `native-panels.toon` is a parse error — the strict parser rejects unknown
+panel keys. Pass them in the request/prompt when you run the panel; the skill applies them at run time
+with the defaults below (see [SKILL Steps 6–7](../skills/native-panel/SKILL.md)).
+
+| Option | Applies to | Default | Meaning |
+| --- | --- | --- | --- |
+| `min_quorum` | any collapsing strategy | `1` | Minimum parseable voices required before a verdict is reported; below it the skill reports `NO_QUORUM` instead of a verdict. |
+| `require_dissent` | `majority` (and the other votes) | off | Also list every non-winning position with its seat label, not just the winner. |
+| `synthesize` | `all-voices` | off | After the individual voices, run one more spawn asking a judge model to combine them into a single synthesized answer. |
+| `track_convergence` | native debate | off | Ask each voice for a one-word verdict each round and stop early when the panel converges (unanimous) or stalls. |
+
+Only `stance` (per seat: `for` / `against` / `neutral`) is a persisted key — see the seat table above. The
+plural "stances" is just the set of per-seat `stance` values; there is no panel-level `stances` key.
+
 ## Using a native panel
 
 You do not call an MCP tool. You ask the orchestrator to run the panel and it follows the `native-panel`
@@ -126,8 +145,11 @@ not available; use engine: mcp for external ACP agents") — again with no MCP f
 ## Not ported
 
 `discount_correlated` (the MCP consensus lineage-discount control) has no native analogue in v3. It stays
-MCP-only. Everything else — the seven strategies, `require_dissent`, `synthesize`, `stances`,
-`min_quorum`, `track_convergence` for native debate — is available on the native path.
+MCP-only. Everything else is available on the native path, split by where it lives: the seven strategies
+and per-seat `stance` are stored in the panel file (see [Schema](#schema)), while `require_dissent`,
+`synthesize`, `min_quorum`, and `track_convergence` are run-time options the skill applies (see
+[Run-time options](#run-time-options-not-stored-in-native-panelstoon)) — they are NOT stored in
+`native-panels.toon`.
 
 See [examples/native-panels.toon](../examples/native-panels.toon) for a ready-to-copy starter with three
 panels, and [roles-native.md](roles-native.md) for the built-in role prompt text native seats use.

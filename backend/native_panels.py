@@ -132,13 +132,17 @@ def _scalar_needs_quote(value: str) -> bool:
     ``claude-sonnet-4.5``, roles, descriptions with ``/ - . ,``) round-trips
     byte-for-byte. The structural characters that break the bare grammar are
     ``[`` / ``]`` (a ``targets[N]`` count), ``:`` (key/value split), ``"`` / ``#``,
-    plus leading/trailing whitespace or an empty string.
+    plus leading/trailing whitespace or an empty string. An embedded newline,
+    tab, or carriage return ALSO forces quoting: a bare scalar is a single line,
+    so a real control character in it would corrupt the TOON structure — and
+    ``_parse_scalar`` can produce one from the ``\\n`` / ``\\t`` / ``\\r`` escapes,
+    so ``_emit_scalar`` must round-trip it back through the quoted+escaped form.
     """
     if value == "":
         return True
     if value != value.strip():
         return True
-    return any(ch in value for ch in ("[", "]", ":", '"', "#"))
+    return any(ch in value for ch in ("[", "]", ":", '"', "#", "\n", "\t", "\r"))
 
 
 def _emit_scalar(value: Any) -> str:
@@ -150,7 +154,16 @@ def _emit_scalar(value: Any) -> str:
         return repr(value)
     s = str(value)
     if _scalar_needs_quote(s):
-        esc = s.replace("\\", "\\\\").replace('"', '\\"')
+        # Escape symmetrically with ``_parse_scalar``'s unescape map. Backslash
+        # first (so the escapes we introduce below are not re-escaped), then the
+        # quote and the three control characters ``_parse_scalar`` decodes.
+        esc = (
+            s.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\t", "\\t")
+            .replace("\r", "\\r")
+        )
         return f'"{esc}"'
     return s
 
@@ -257,6 +270,8 @@ def parse(text: str) -> list[dict[str, Any]]:
     current: dict[str, Any] | None = None
     current_seat: dict[str, Any] | None = None
     in_targets = False
+    seen_panel_keys: set[str] = set()
+    targets_declared = False
 
     for raw in lines:
         if not raw.strip() or raw.lstrip().startswith("#"):
@@ -280,6 +295,8 @@ def parse(text: str) -> list[dict[str, Any]]:
             current = {"name": name, "targets": []}
             current_seat = None
             in_targets = False
+            seen_panel_keys = set()
+            targets_declared = False
             continue
 
         if current is None:
@@ -312,6 +329,19 @@ def parse(text: str) -> list[dict[str, Any]]:
             current_seat = None
             base = stripped[:-1].strip() if stripped.endswith(":") else stripped
             if stripped.endswith(":") and base.split("[", 1)[0] == "targets":
+                # A second ``targets[...]`` in one panel would silently discard
+                # the first seat list (a 3-seat panel could become 1). Reject it.
+                if targets_declared:
+                    raise _panel_error(name, "duplicate 'targets' declaration")
+                targets_declared = True
+                # Remember the declared count so ``_finalize_panel`` can enforce
+                # it matches the seats actually parsed. (This is stricter than the
+                # ``panels.toon`` serializer, which treats the count as advisory —
+                # a deliberate divergence: native-panels.py is the strict reference
+                # parser, and the count guards against seats dropped by a
+                # formatting slip. The serializer always emits ``targets[len]``, so
+                # a canonical file always matches and round-trips.)
+                current["_declared_count"] = _parse_targets_count(name, base)
                 in_targets = True
                 current["targets"] = []
                 continue
@@ -326,6 +356,10 @@ def parse(text: str) -> list[dict[str, Any]]:
                     f"unknown panel key {key!r} — valid keys are "
                     f"{', '.join(k for k in _PANEL_KEYS)}",
                 )
+            # A repeated panel key would silently overwrite the earlier value.
+            if key in seen_panel_keys:
+                raise _panel_error(name, f"duplicate panel key {key!r}")
+            seen_panel_keys.add(key)
             current[key] = _parse_scalar(v)
             continue
 
@@ -349,6 +383,24 @@ def parse(text: str) -> list[dict[str, Any]]:
     return panels
 
 
+def _parse_targets_count(panel_name: str, base: str) -> int | None:
+    """Extract N from a ``targets[N]`` header (``base`` has no trailing colon).
+
+    Returns the declared count, or ``None`` when the header is a bare ``targets``
+    with no bracketed count. Raises on a malformed or non-integer count.
+    """
+    lb = base.find("[")
+    if lb == -1:
+        return None
+    rb = base.find("]", lb)
+    if rb == -1:
+        raise _panel_error(panel_name, f"malformed targets header {base!r}")
+    inner = base[lb + 1 : rb].strip()
+    if not inner.isdigit():
+        raise _panel_error(panel_name, f"targets count must be an integer (got {inner!r})")
+    return int(inner)
+
+
 def _set_seat_key(panel_name: str, seat: dict[str, Any], key: str, value: Any) -> None:
     if key not in _SEAT_KEYS:
         raise _panel_error(
@@ -361,6 +413,10 @@ def _set_seat_key(panel_name: str, seat: dict[str, Any], key: str, value: Any) -
 def _finalize_panel(panel: dict[str, Any]) -> None:
     """Validate a fully-parsed panel; raise on the first schema violation."""
     name = panel["name"]
+
+    # The declared ``targets[N]`` count, stashed by ``parse``. Pop it so it never
+    # leaks into the returned record.
+    declared_count = panel.pop("_declared_count", None)
 
     engine = panel.get("engine")
     if engine != "native":
@@ -381,6 +437,14 @@ def _finalize_panel(panel: dict[str, Any]) -> None:
     targets = panel.get("targets")
     if not isinstance(targets, list) or not targets:
         raise _panel_error(name, "needs a non-empty targets list")
+
+    if declared_count is not None and declared_count != len(targets):
+        raise _panel_error(
+            name,
+            f"declared targets[{declared_count}] but found {len(targets)} seat(s) — "
+            f"fix the count or the seat list (a mismatch usually means a "
+            f"mis-indented seat was dropped)",
+        )
 
     for i, seat in enumerate(targets):
         if not isinstance(seat, dict):

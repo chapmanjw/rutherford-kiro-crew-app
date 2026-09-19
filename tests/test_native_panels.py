@@ -111,6 +111,64 @@ def test_edge_roundtrip() -> None:
 
 
 # --------------------------------------------------------------------------
+# Finding 1: embedded control chars (newline/tab/CR) survive the round-trip
+# --------------------------------------------------------------------------
+
+# A description that arrives via the documented escape syntax parses to a value
+# holding a REAL newline (and tab, and CR). The serializer must re-emit it quoted
+# and escaped, not as a bare scalar with a literal control char (which would
+# corrupt the TOON structure and make the next parse raise "unexpected line").
+CTRL = (
+    "native-panels:\n"
+    "  ctrl:\n"
+    '    description: "line one\\nline two\\ttabbed\\rreturn"\n'
+    "    engine: native\n"
+    "    targets[1]:\n"
+    "      - model: m\n"
+)
+
+
+def test_control_char_roundtrip() -> None:
+    parsed = np.parse(CTRL)
+    desc = parsed[0]["description"]
+    check("escaped \\n decodes to a real newline", "\n" in desc)
+    check("escaped \\t decodes to a real tab", "\t" in desc)
+    check("escaped \\r decodes to a real carriage return", "\r" in desc)
+
+    # The re-serialized text must re-parse (no corruption) and be structurally
+    # identical — the whole point of Finding 1.
+    text2 = np.serialize(parsed)
+    check("serialized control-char value re-parses without error",
+          np.parse(text2) is not None)
+    check("parse(serialize(x)) preserves the control-char value",
+          np.parse(text2)[0]["description"] == desc)
+    check("roundtrip_ok holds for a control-char value", np.roundtrip_ok(CTRL))
+
+    # serialize(parse(x)) is idempotent: a second round-trip is a fixed point.
+    check("serialize is a fixed point on the re-parsed value",
+          np.serialize(np.parse(text2)) == text2)
+
+    # And the emitted scalar is quoted+escaped, never a bare literal newline.
+    check("no bare literal newline leaked into a value line",
+          all(("\t" not in ln and "\r" not in ln) for ln in text2.splitlines()))
+
+
+def test_control_char_via_structured_input() -> None:
+    # A value built in memory with real control chars (not via the file) must
+    # also serialize->parse cleanly — this is what a programmatic writer produces.
+    panels = [{
+        "name": "prog",
+        "engine": "native",
+        "description": "a\nb\tc\rd",
+        "targets": [{"model": "m"}],
+    }]
+    text = np.serialize(panels)
+    check("in-memory control chars re-parse", np.parse(text) is not None)
+    check("in-memory control-char description preserved",
+          np.parse(text)[0]["description"] == "a\nb\tc\rd")
+
+
+# --------------------------------------------------------------------------
 # Strict parse errors
 # --------------------------------------------------------------------------
 
@@ -154,6 +212,66 @@ def test_parse_errors() -> None:
         "      - model: m\n        weight: -1\n"
     )
     expect_valueerror("negative weight rejected", lambda: np.parse(neg_weight))
+
+
+# --------------------------------------------------------------------------
+# Finding 3: parser rejects duplicate targets / duplicate key / count mismatch
+# --------------------------------------------------------------------------
+
+def test_parser_hardening() -> None:
+    dup_targets = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n"
+        "    targets[1]:\n      - model: b\n"
+    )
+    expect_valueerror("duplicate targets declaration rejected",
+                      lambda: np.parse(dup_targets))
+
+    dup_key = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    strategy: majority\n    strategy: unanimous\n"
+        "    targets[1]:\n      - model: a\n"
+    )
+    expect_valueerror("duplicate panel key rejected", lambda: np.parse(dup_key))
+
+    dup_description = (
+        "native-panels:\n  p:\n    description: one\n    description: two\n"
+        "    engine: native\n    targets[1]:\n      - model: a\n"
+    )
+    expect_valueerror("duplicate description key rejected",
+                      lambda: np.parse(dup_description))
+
+    # Declared count higher than the seats present (a seat "dropped").
+    count_high = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[3]:\n      - model: a\n"
+    )
+    expect_valueerror("targets[3] with 1 seat rejected (mismatch)",
+                      lambda: np.parse(count_high))
+
+    # Declared count lower than the seats present.
+    count_low = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n      - model: b\n"
+    )
+    expect_valueerror("targets[1] with 2 seats rejected (mismatch)",
+                      lambda: np.parse(count_low))
+
+    # A correct count still parses (guard against over-strictness).
+    ok = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[2]:\n      - model: a\n      - model: b\n"
+    )
+    check("matching targets[2] with 2 seats parses",
+          len(np.parse(ok)[0]["targets"]) == 2)
+
+    # A non-integer count is a malformed header.
+    bad_count = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[x]:\n      - model: a\n"
+    )
+    expect_valueerror("non-integer targets count rejected",
+                      lambda: np.parse(bad_count))
 
 
 # --------------------------------------------------------------------------
@@ -273,7 +391,10 @@ def main() -> int:
     for fn in (
         test_example_roundtrip,
         test_edge_roundtrip,
+        test_control_char_roundtrip,
+        test_control_char_via_structured_input,
         test_parse_errors,
+        test_parser_hardening,
         test_missing_root_is_error,
         test_discovery_absent_file,
         test_discovery_present_broken_file_reports_error,
