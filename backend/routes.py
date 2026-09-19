@@ -36,11 +36,13 @@ resolved scope's panels.toon path.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import tempfile
 import tomllib
 import traceback
+import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -59,6 +61,23 @@ try:  # pragma: no cover - exercised implicitly by both load styles
     from backend import native_panels  # type: ignore
 except ImportError:  # loaded as a top-level module (backend/ on sys.path)
     import native_panels  # type: ignore
+
+_LOG = logging.getLogger("rutherford.routes")
+
+
+def _server_error(exc: BaseException, where: str) -> web.Response:
+    """500 response that does NOT leak internals to the client.
+
+    The full traceback (which contains absolute filesystem paths) is logged
+    server-side under a short correlation id; the client gets only that id and a
+    generic message, so an operator can grep the log for the failure without the
+    path ever crossing the wire.
+    """
+    cid = uuid.uuid4().hex[:8]
+    _LOG.error("[%s] %s failed: %s\n%s", cid, where, exc, traceback.format_exc())
+    return web.json_response(
+        {"error": "internal server error", "error_id": cid}, status=500
+    )
 
 # --------------------------------------------------------------------------
 # Platform / path resolution
@@ -1301,13 +1320,16 @@ async def _handle_panels_write(request: web.Request, ctx: AppContext) -> web.Res
 # are untouched.
 
 
-def _native_panels_path_for_scope(scope: str) -> Path:
-    """Resolve the native-panels.toon path for a scope. global → ~/.rutherford,
-    workspace → <cwd>/.rutherford. (native_panels.atomic_write re-guards the
-    resolved path, so this only picks the scope directory.)"""
-    if scope == "global":
-        return _home() / ".rutherford" / native_panels.NATIVE_PANELS_FILENAME
-    return _project_root() / ".rutherford" / native_panels.NATIVE_PANELS_FILENAME
+def _native_scope_map() -> dict[str, Path]:
+    """scope name → native-panels.toon path, sourced from
+    ``native_panels.scope_dirs()`` — the SINGLE source of truth the skill uses.
+
+    This honors ``$RUTHERFORD_CONFIG_DIR`` (highest precedence, exposed as the
+    ``config_dir`` scope) and de-duplicates scopes that resolve to the same
+    directory (e.g. home == cwd), so the UI edits exactly the files the skill
+    will actually run — never a shadowed lower-precedence copy.
+    """
+    return {e["scope"]: e["path"] for e in native_panels.scope_dirs()}
 
 
 def _native_panel_view(panel: dict[str, Any]) -> dict[str, Any]:
@@ -1424,25 +1446,48 @@ async def _handle_native_panels(request: web.Request, ctx: AppContext) -> web.Re
     """GET /rutherford-native-panels — native panels from native-panels.toon across
     global + project scopes.
 
-    Mirrors GET /panels: one entry per scope with the file's parsed panels (full
-    seat lists so the editor round-trips) plus a ``targets`` count. A parse error is
+    Drives its scope list off ``native_panels.scope_dirs()`` (the same resolver the
+    skill uses), so ``config_dir`` ($RUTHERFORD_CONFIG_DIR) appears when set and
+    coinciding scopes (home == cwd) collapse to one entry. One entry per scope with
+    the file's parsed panels (full seat lists so the editor round-trips) plus a
+    ``targets`` count. Each panel view carries ``resolved`` / ``resolved_scope`` so
+    the UI can show which scope a panel ACTUALLY runs from under precedence (a
+    same-named panel in a higher scope shadows the lower one). A parse error is
     surfaced per-source, never raised — a malformed native-panels.toon reports its
     reason instead of blanking the tab.
     """
+    scopes = native_panels.scope_dirs()
+    # Precedence resolution: which scope actually wins for each panel name.
+    resolved, _errs = native_panels.discover_panels()
+    winning = {name: rec.get("_scope") for name, rec in resolved.items()}
+
     result: list[dict[str, Any]] = []
-    for d in _rutherford_dirs():
-        scope = "global" if d == _home() / ".rutherford" else "workspace"
-        path = d / native_panels.NATIVE_PANELS_FILENAME
+    for entry_dir in scopes:
+        scope = entry_dir["scope"]
+        path = entry_dir["path"]
         meta = _meta(path, scope)
         entry: dict[str, Any] = {**meta, "panels": []}
         if path.is_file():
             try:
                 parsed = native_panels.parse(path.read_text(encoding="utf-8"))
-                entry["panels"] = [_native_panel_view(p) for p in parsed]
+                views: list[dict[str, Any]] = []
+                for p in parsed:
+                    view = _native_panel_view(p)
+                    win = winning.get(p["name"])
+                    view["resolved"] = win == scope
+                    view["resolved_scope"] = win
+                    views.append(view)
+                entry["panels"] = views
             except (OSError, ValueError) as exc:
                 entry["error"] = f"{type(exc).__name__}: {exc}"
         result.append(entry)
-    return web.json_response({"platform": _platform_label(), "sources": result})
+    return web.json_response(
+        {
+            "platform": _platform_label(),
+            "scopes": [s["scope"] for s in scopes],
+            "sources": result,
+        }
+    )
 
 
 async def _handle_native_panels_write(request: web.Request, ctx: AppContext) -> web.Response:
@@ -1457,10 +1502,12 @@ async def _handle_native_panels_write(request: web.Request, ctx: AppContext) -> 
     re-read payload with ``written: true`` (mirrors the GET shape) so the UI can
     confirm persistence via written===true or a verify GET.
     """
+    scope_map = _native_scope_map()
     scope = (request.query.get("scope") or "global").lower()
-    if scope not in ("global", "workspace"):
+    if scope not in scope_map:
+        allowed = "|".join(sorted(scope_map))
         return web.json_response(
-            {"error": f"invalid scope {scope!r}; expected global|workspace"}, status=400
+            {"error": f"invalid scope {scope!r}; expected {allowed}"}, status=400
         )
     try:
         try:
@@ -1473,7 +1520,7 @@ async def _handle_native_panels_write(request: web.Request, ctx: AppContext) -> 
             return web.json_response({"error": verr}, status=400)
         assert clean is not None
 
-        path = _native_panels_path_for_scope(scope)
+        path = scope_map[scope]
         # native_panels.atomic_write owns the full write-safety envelope: it refuses
         # a non native-panels.toon name or a parent outside a resolved .rutherford
         # scope (path guard), runs the round-trip check, backs up, and writes
@@ -1481,9 +1528,12 @@ async def _handle_native_panels_write(request: web.Request, ctx: AppContext) -> 
         try:
             native_panels.atomic_write(path, clean)
         except ValueError as exc:
+            # ValueError is a validation/guard failure — its message is safe (it
+            # names at most "native-panels.toon", never an absolute path).
             return web.json_response({"error": str(exc)}, status=400)
         except OSError as exc:
-            return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=500)
+            # An OSError message can embed an absolute path — don't leak it.
+            return _server_error(exc, "PUT /rutherford-native-panels (write)")
 
         meta = _meta(path, scope)
         payload: dict[str, Any] = {**meta, "written": True, "panels": []}
@@ -1494,10 +1544,7 @@ async def _handle_native_panels_write(request: web.Request, ctx: AppContext) -> 
             payload["error"] = f"{type(exc).__name__}: {exc}"
         return web.json_response(payload)
     except Exception as exc:  # noqa: BLE001 — surface swallowed errors
-        tb = traceback.format_exc()
-        return web.json_response(
-            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
-        )
+        return _server_error(exc, "PUT /rutherford-native-panels")
 
 
 # --------------------------------------------------------------------------

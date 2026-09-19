@@ -131,12 +131,19 @@ type NativePanelRec = {
   reduction?: string
   targets: number | null
   seats?: NativeSeat[]
+  // Precedence provenance (GET only): resolved===false means a higher-precedence
+  // scope shadows this same-named panel; resolved_scope names the scope that wins.
+  resolved?: boolean
+  resolved_scope?: string | null
 }
 
 type NativePanelSource = Meta & { panels: NativePanelRec[] }
 
 type NativePanelsResp = {
   platform: string
+  // The scopes the backend actually exposes (native_panels.scope_dirs()): includes
+  // `config_dir` when $RUTHERFORD_CONFIG_DIR is set, de-duplicated when scopes coincide.
+  scopes?: string[]
   sources: NativePanelSource[]
 }
 
@@ -458,40 +465,57 @@ export default function Rutherford() {
     [api],
   )
 
-  // Persist the NATIVE panels list for one scope. Identical confirmed-persistence
-  // discipline to savePanels (the host `put` resolves — does not throw — on a
-  // non-OK response, so require written===true, retry once through a transient
-  // 403, then fall back to a verify GET that confirms the panel-name set landed).
-  // Targets /rutherford-native-panels (native-panels.toon), never the ACP route.
+  // Persist the NATIVE panels list for one scope. Confirmed-persistence discipline:
+  // require written===true; on an unconfirmed response retry ONCE (the host `put`
+  // resolves null on a non-OK response — including a transient 403 in the host's
+  // silent-refresh window — so the retry rides that window). The host SDK does not
+  // surface the HTTP status, so a genuine 400 (a rejected body) also comes back as
+  // null; the guarantee against a FALSE success is therefore the verify-GET, which
+  // compares the on-disk CONTENT field-for-field against what we sent — NOT just the
+  // panel names. A rejected write leaves stale content on disk, so the content check
+  // fails and we throw. Targets /rutherford-native-panels, never the ACP route.
   const saveNativePanels = useCallback(
-    async (scope: 'global' | 'workspace', panelsBody: NativePanelRec[]) => {
-      const url = `${BASE}/rutherford-native-panels?scope=${scope}`
+    async (scope: string, panelsBody: NativePanelRec[]) => {
+      const url = `${BASE}/rutherford-native-panels?scope=${encodeURIComponent(scope)}`
       const body = { panels: panelsBody }
       const wrote = (v: unknown): v is NativePanelsWriteResp =>
         !!v && typeof v === 'object' && (v as NativePanelsWriteResp).written === true
+      // A written===true echo is authoritative ONLY when it also round-tripped the
+      // content we sent (the backend re-reads from disk before echoing).
+      const echoOk = (v: unknown): v is NativePanelsWriteResp =>
+        wrote(v) &&
+        nativePanelsContentMatch(
+          panelsBody,
+          Array.isArray((v as NativePanelsWriteResp).panels)
+            ? (v as NativePanelsWriteResp).panels
+            : [],
+        )
 
       let resp: unknown = await api.put(url, body)
-      if (!wrote(resp)) {
+      if (!echoOk(resp)) {
         await new Promise((r) => setTimeout(r, 600))
         resp = await api.put(url, body)
       }
 
-      let confirmed: NativePanelsWriteResp | null = wrote(resp) ? (resp as NativePanelsWriteResp) : null
+      let confirmed: NativePanelsWriteResp | null = echoOk(resp)
+        ? (resp as NativePanelsWriteResp)
+        : null
       if (!confirmed) {
+        // Verify GET: confirm the on-disk CONTENT (not just the name set) equals
+        // what we asked to persist. A 400-rejected save leaves the old content, so
+        // a content match here is proof the write actually landed.
         const got = (await api.get(`${BASE}/rutherford-native-panels`)) as NativePanelsResp | null
         const src = got?.sources?.find((s) => s.scope === scope)
-        if (src) {
-          const want = panelsBody.map((p) => p.name).sort()
-          const have = (Array.isArray(src.panels) ? src.panels : []).map((p) => p.name).sort()
-          if (want.length === have.length && want.every((n, i) => n === have[i])) {
-            confirmed = { ...src, written: true }
-          }
+        if (src && nativePanelsContentMatch(panelsBody, Array.isArray(src.panels) ? src.panels : [])) {
+          confirmed = { ...src, written: true }
         }
       }
 
       if (!confirmed) {
         throw new Error(
-          'Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your edits were kept; try Save again.',
+          'Save could not be confirmed — the file on disk does not match what you saved. ' +
+            'The backend may have rejected the panel (a validation error) or a transient ' +
+            'auth refresh dropped the write. Your edits were kept; fix any reported error and Save again.',
         )
       }
 
@@ -2285,6 +2309,56 @@ function nativePanelsToBody(drafts: NativePanelRec[]): NativePanelRec[] {
   }))
 }
 
+// Human label for a native-panels scope. `config_dir` is the $RUTHERFORD_CONFIG_DIR
+// override (highest precedence); unknown scopes fall back to their raw name.
+function nativeScopeLabel(scope: string): string {
+  if (scope === 'global') return 'Global'
+  if (scope === 'workspace') return 'Workspace'
+  if (scope === 'config_dir') return 'Config Dir'
+  return scope
+}
+
+// Canonical projection of a native seat/panel for a CONTENT equality check after
+// a verify-GET. Normalizes exactly the way the backend does (empty optional keys
+// drop to '', weight to its numeric string, parity to a bool, engine always
+// native) so a round-tripped file compares equal to the body we sent — and a file
+// that did NOT take our write (e.g. a rejected 400 left the old content on disk)
+// compares UNequal, so a failed save can never be mistaken for a success.
+function canonNativeSeat(s: NativeSeat): Record<string, string | boolean> {
+  const w = s.weight
+  const wStr =
+    w === undefined || w === null || String(w).trim() === '' ? '' : String(Number(w))
+  return {
+    model: String(s.model ?? '').trim(),
+    role: String(s.role ?? '').trim(),
+    label: String(s.label ?? '').trim(),
+    stance: String(s.stance ?? '').trim(),
+    agent: String(s.agent ?? '').trim(),
+    weight: wStr,
+    parity: s.parity === true,
+  }
+}
+
+function canonNativePanel(p: NativePanelRec): unknown {
+  return {
+    name: String(p.name ?? '').trim(),
+    description: String(p.description ?? '').trim(),
+    strategy: String(p.strategy ?? '').trim(),
+    reduction: String(p.reduction ?? '').trim(),
+    seats: (Array.isArray(p.seats) ? p.seats : []).map(canonNativeSeat),
+  }
+}
+
+// True only when the on-disk panels (from a verify-GET) match, field-for-field,
+// the body we asked to persist — not merely the same NAMES.
+function nativePanelsContentMatch(want: NativePanelRec[], have: NativePanelRec[]): boolean {
+  if (want.length !== have.length) return false
+  return (
+    JSON.stringify(want.map(canonNativePanel)) ===
+    JSON.stringify(have.map(canonNativePanel))
+  )
+}
+
 function NativeSeatEditor({
   seat,
   meta,
@@ -2534,18 +2608,30 @@ function NativePanelsView({
 }: {
   nativePanels: NativePanelsResp | null
   meta: MetaResp | null
-  onSave: (scope: 'global' | 'workspace', body: NativePanelRec[]) => Promise<NativePanelsWriteResp>
+  onSave: (scope: string, body: NativePanelRec[]) => Promise<NativePanelsWriteResp>
 }) {
-  const [scope, setScope] = useState<'global' | 'workspace'>('global')
+  const [scope, setScope] = useState<string>('global')
   const [drafts, setDrafts] = useState<NativePanelRec[] | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [savedScope, setSavedScope] = useState<'global' | 'workspace' | null>(null)
+  const [savedScope, setSavedScope] = useState<string | null>(null)
 
   const sources = Array.isArray(nativePanels?.sources) ? nativePanels!.sources : []
-  const source = sources.find((s) => s.scope === scope) || null
-  const sourceKey = JSON.stringify(source?.panels ?? null) + '|' + scope
+  // Available scopes come from the backend (native_panels.scope_dirs()): they
+  // already honor $RUTHERFORD_CONFIG_DIR (a `config_dir` scope) and collapse
+  // scopes that resolve to the same directory (home == cwd → one entry), so the
+  // selector never shows a duplicate or a scope the skill won't actually run.
+  const availScopes: string[] =
+    Array.isArray(nativePanels?.scopes) && nativePanels!.scopes!.length > 0
+      ? nativePanels!.scopes!
+      : sources.map((s) => s.scope)
+  // Keep the selected scope valid as the available set changes.
+  const activeScope = availScopes.includes(scope) ? scope : availScopes[0] || 'global'
+  const source = sources.find((s) => s.scope === activeScope) || null
+  const sourceKey = JSON.stringify(source?.panels ?? null) + '|' + activeScope
   const modelsNote = String(meta?.native_models_source || '')
+  // Panels at THIS scope that a higher-precedence scope shadows (won't run here).
+  const shadowed = (source?.panels || []).filter((p) => p.resolved === false)
 
   useEffect(() => {
     if (!source) {
@@ -2587,9 +2673,12 @@ function NativePanelsView({
     setSaveMsg(null)
     setSavedScope(null)
     try {
-      await onSave(scope, nativePanelsToBody(drafts))
-      setSaveMsg({ ok: true, text: `Saved to ${scope} native-panels.toon (backup written).` })
-      setSavedScope(scope)
+      await onSave(activeScope, nativePanelsToBody(drafts))
+      setSaveMsg({
+        ok: true,
+        text: `Saved to ${nativeScopeLabel(activeScope)} native-panels.toon (backup written).`,
+      })
+      setSavedScope(activeScope)
     } catch (e) {
       setSaveMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -2600,18 +2689,18 @@ function NativePanelsView({
   return (
     <>
       <div className="flex items-center gap-1 mb-4">
-        {(['global', 'workspace'] as const).map((s) => (
+        {availScopes.map((s) => (
           <button
             key={s}
             onClick={() => { setSavedScope(null); setScope(s) }}
             className={
               'px-3 py-1.5 text-sm rounded transition-colors ' +
-              (scope === s
+              (activeScope === s
                 ? 'bg-[var(--accent,#6366f1)] text-white'
                 : 'bg-[var(--surface-2,#2a2a2a)] text-muted hover:text-[var(--fg,#eee)]')
             }
           >
-            {s === 'global' ? 'Global' : 'Workspace'}
+            {nativeScopeLabel(s)}
           </button>
         ))}
         <button
@@ -2619,7 +2708,7 @@ function NativePanelsView({
           disabled={saving || !drafts}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-[var(--accent,#6366f1)] text-white disabled:opacity-50"
         >
-          <Save size={14} /> {saving ? 'Saving…' : `Save ${scope}`}
+          <Save size={14} /> {saving ? 'Saving…' : `Save ${nativeScopeLabel(activeScope)}`}
         </button>
       </div>
 
@@ -2657,7 +2746,7 @@ function NativePanelsView({
         </div>
       )}
 
-      {savedScope === scope && (
+      {savedScope === activeScope && (
         <div className="flex items-start gap-2 text-sm mb-4 rounded border border-[var(--border,#333)] bg-[var(--surface-2,#2a2a2a)] px-3 py-2.5">
           <Info size={15} className="mt-0.5 shrink-0 text-[var(--accent,#6366f1)]" />
           <span className="text-[var(--fg,#eee)]">
@@ -2668,8 +2757,25 @@ function NativePanelsView({
         </div>
       )}
 
+      {shadowed.length > 0 && (
+        <div className="flex items-start gap-2 text-sm mb-4 rounded border border-amber-500/40 bg-[var(--surface-2,#2a2a2a)] px-3 py-2.5">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-500" />
+          <span className="text-[var(--fg,#eee)]">
+            {shadowed.length === 1 ? 'This panel is' : 'These panels are'} defined here but{' '}
+            <b>overridden</b> at a higher-precedence scope, so the skill runs the other copy:{' '}
+            {shadowed.map((p, i) => (
+              <span key={p.name}>
+                {i > 0 && ', '}
+                <code>{p.name}</code> → {nativeScopeLabel(String(p.resolved_scope || ''))}
+              </span>
+            ))}
+            . Edit it there to change what actually runs.
+          </span>
+        </div>
+      )}
+
       <Card>
-        <CardTitle>Native panels · {scope}</CardTitle>
+        <CardTitle>Native panels · {nativeScopeLabel(activeScope)}</CardTitle>
         {source && <PathChip meta={source} />}
         {source?.error && <p className="text-xs text-amber-500 mt-1">{source.error}</p>}
         {source && !source.exists && (
@@ -2680,7 +2786,9 @@ function NativePanelsView({
 
         {drafts === null ? (
           <p className="text-sm text-muted mt-2">
-            {nativePanels ? `Loading ${scope} native panels…` : 'Native panels route unavailable.'}
+            {nativePanels
+              ? `Loading ${nativeScopeLabel(activeScope)} native panels…`
+              : 'Native panels route unavailable.'}
           </p>
         ) : (
           <div className="mt-3 flex flex-col gap-3">
