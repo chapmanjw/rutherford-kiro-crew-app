@@ -50,6 +50,16 @@ from aiohttp import web
 from kiro_crew.apps.context import AppContext
 from kiro_crew.apps.route_registry import AppRoute
 
+# The native-panels (v3.0.0) TOON serializer/parser + write-safety envelope. It
+# lives next to this file. Import it whether routes.py is loaded as a package
+# module (``backend.routes``, the gateway's ``backend.routes:register_routes``
+# entry) or as a bare module on sys.path (the test/validator harness that adds
+# ``backend/`` to the path), so the native-panels routes work under both.
+try:  # pragma: no cover - exercised implicitly by both load styles
+    from backend import native_panels  # type: ignore
+except ImportError:  # loaded as a top-level module (backend/ on sys.path)
+    import native_panels  # type: ignore
+
 # --------------------------------------------------------------------------
 # Platform / path resolution
 # --------------------------------------------------------------------------
@@ -346,10 +356,31 @@ _BUILTIN_ROLE_IDS = (
     "principal-reviewer", "architect", "debugger", "security-reviewer", "explainer",
 )
 
-# Consensus aggregation strategies (reference/panels.md).
+# Consensus aggregation strategies (reference/panels.md). Shared by MCP panels
+# AND native panels — the native skill ports all seven (reference/native-panels.md).
 _STRATEGIES = (
     "all-voices", "unanimous", "majority", "plurality", "weighted",
     "parity-pair", "rank",
+)
+
+# The five native roles a native seat's ``role:`` may name (reference/roles-native.md).
+# Same five personas as the built-in MCP roles, ported to plain prompt text the
+# spawned model receives directly. Kept as its own name (rather than aliasing
+# _BUILTIN_ROLE_IDS) so the native editor's role dropdown is explicit about which
+# list it renders, even though the two currently coincide.
+_NATIVE_ROLE_IDS = (
+    "principal-reviewer", "architect", "debugger", "security-reviewer", "explainer",
+)
+
+# Kiro-spawnable model ids drawn from the shipped native-panels docs/examples
+# (examples/native-panels.toon, reference/native-panels.md, skills/native-panel).
+# This is NOT a live roster: a backend route handler has no MCP client and no way
+# to run ``kiro-cli chat --list-models`` in-process (see the agent-ids note above),
+# so we cannot enumerate the machine's real models. These seed a free-text datalist
+# in the native seat editor; the ACTUAL model is entered as free text and validated
+# by the native-panel skill against ``kiro-cli chat --list-models`` at run time.
+_NATIVE_MODELS = (
+    "claude-sonnet-5", "claude-sonnet-4.5", "gpt-5.6-luna", "gpt-5.6", "deepseek-3.2",
 )
 
 # Safety postures (reference/config.md).
@@ -1255,6 +1286,221 @@ async def _handle_panels_write(request: web.Request, ctx: AppContext) -> web.Res
 
 
 # --------------------------------------------------------------------------
+# Native panels (v3.0.0): native-panels.toon read/write
+# --------------------------------------------------------------------------
+#
+# The all-Kiro-Crew execution path. Native panels live in their OWN file
+# (native-panels.toon), have a DIFFERENT seat schema than panels.toon (a required
+# ``model`` instead of a ``cli``, plus ``engine``/``reduction``/``agent``), and
+# are parsed/serialized STRICTLY by ``backend.native_panels`` (unknown keys are a
+# parse error). These routes MIRROR the ACP panels routes' safety envelope but
+# delegate every byte of serialization + the write safety (round-trip check,
+# timestamped .bak, atomic temp-file + os.replace, and the .rutherford path guard)
+# to ``native_panels.serialize`` / ``native_panels.atomic_write`` so there is one
+# strict implementation of the native format. The ACP /rutherford-panels routes
+# are untouched.
+
+
+def _native_panels_path_for_scope(scope: str) -> Path:
+    """Resolve the native-panels.toon path for a scope. global → ~/.rutherford,
+    workspace → <cwd>/.rutherford. (native_panels.atomic_write re-guards the
+    resolved path, so this only picks the scope directory.)"""
+    if scope == "global":
+        return _home() / ".rutherford" / native_panels.NATIVE_PANELS_FILENAME
+    return _project_root() / ".rutherford" / native_panels.NATIVE_PANELS_FILENAME
+
+
+def _native_panel_view(panel: dict[str, Any]) -> dict[str, Any]:
+    """Shape one parsed native panel for the GET/PUT response.
+
+    Mirrors the ACP panels view (name/description/strategy/targets-count/seats) so
+    the frontend can reuse its patterns, plus the native-only ``engine`` and
+    ``reduction`` keys. ``seats`` is the full parsed seat list so the editor can
+    round-trip it; ``targets`` is the seat count for a compact display.
+    """
+    return {
+        "name": panel["name"],
+        "description": panel.get("description", ""),
+        "engine": panel.get("engine", "native"),
+        "strategy": panel.get("strategy", ""),
+        "reduction": panel.get("reduction", ""),
+        "targets": len(panel.get("targets") or []),
+        "seats": panel.get("targets") or [],
+    }
+
+
+def _validate_native_panels_body(body: Any) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Validate an incoming native-panels write body into the structured model
+    ``native_panels.serialize`` / ``native_panels.atomic_write`` expect.
+
+    Accepts either a bare list of panels or ``{"panels": [...]}``. Each panel needs
+    a non-empty name and a non-empty seat list (read from ``seats`` — the shape the
+    GET returns — falling back to ``targets`` when that is itself a list). Each seat
+    needs a non-empty ``model``; the other native seat keys (role/label/stance/
+    agent/weight/parity) are optional and only carried through when set. ``engine``
+    defaults to ``native``. Returns ``(panels, error)`` where each clean panel
+    carries its seat list under ``targets`` (native_panels' seat-list key). The
+    STRICT native parser (engine must be native, weight ≥ 0, parity a bool, etc.)
+    runs again inside atomic_write's round-trip check, so this is the friendly
+    first pass, not the only guard.
+    """
+    if isinstance(body, dict) and "panels" in body:
+        body = body["panels"]
+    if not isinstance(body, list):
+        return None, 'body must be a list of native panels (or {"panels": [...] })'
+    names: set[str] = set()
+    clean: list[dict[str, Any]] = []
+    for i, p in enumerate(body):
+        if not isinstance(p, dict):
+            return None, f"native panel [{i}] must be an object"
+        name = str(p.get("name", "")).strip()
+        if not name:
+            return None, f"native panel [{i}] is missing a non-empty name"
+        if name in names:
+            return None, f"duplicate native panel name {name!r}"
+        names.add(name)
+
+        seats_in = p.get("seats")
+        if not isinstance(seats_in, list):
+            # Tolerate a seat list supplied under ``targets`` (native_panels' own key).
+            seats_in = p.get("targets")
+        if not isinstance(seats_in, list) or not seats_in:
+            return None, f"native panel {name!r} needs a non-empty seats list"
+
+        seats: list[dict[str, Any]] = []
+        for j, s in enumerate(seats_in):
+            if not isinstance(s, dict):
+                return None, f"native panel {name!r} seat [{j}] must be an object"
+            model = str(s.get("model", "")).strip()
+            if not model:
+                return None, f"native panel {name!r} seat [{j}] is missing a required non-empty model"
+            seat: dict[str, Any] = {"model": model}
+            # String-valued optional keys — carried through only when non-empty.
+            for k in ("role", "label", "stance", "agent"):
+                v = s.get(k)
+                if v is None:
+                    continue
+                sv = str(v).strip()
+                if sv != "":
+                    seat[k] = sv
+            # weight — a number ≥ 0. Keep an integral value as an int so the TOON
+            # emits ``1`` not ``1.0`` (matches the canonical example formatting).
+            w = s.get("weight")
+            if w is not None and not (isinstance(w, str) and w.strip() == ""):
+                if isinstance(w, bool):
+                    return None, f"native panel {name!r} seat [{j}] weight must be a number"
+                try:
+                    wv = float(w)
+                except (TypeError, ValueError):
+                    return None, f"native panel {name!r} seat [{j}] weight must be a number"
+                if wv < 0:
+                    return None, f"native panel {name!r} seat [{j}] weight must be >= 0"
+                seat["weight"] = int(wv) if wv == int(wv) else wv
+            # parity — a bool. Only carried through when True (false is the default).
+            par = s.get("parity")
+            if isinstance(par, bool):
+                if par:
+                    seat["parity"] = True
+            elif par is not None and str(par).strip() != "":
+                return None, f"native panel {name!r} seat [{j}] parity must be a boolean"
+            seats.append(seat)
+
+        engine = str(p.get("engine") or "native").strip() or "native"
+        panel: dict[str, Any] = {"name": name, "engine": engine, "targets": seats}
+        desc = str(p.get("description", "") or "").strip()
+        if desc:
+            panel["description"] = desc
+        strat = str(p.get("strategy", "") or "").strip()
+        if strat:
+            panel["strategy"] = strat
+        red = str(p.get("reduction", "") or "").strip()
+        if red:
+            panel["reduction"] = red
+        clean.append(panel)
+    return clean, None
+
+
+async def _handle_native_panels(request: web.Request, ctx: AppContext) -> web.Response:
+    """GET /rutherford-native-panels — native panels from native-panels.toon across
+    global + project scopes.
+
+    Mirrors GET /panels: one entry per scope with the file's parsed panels (full
+    seat lists so the editor round-trips) plus a ``targets`` count. A parse error is
+    surfaced per-source, never raised — a malformed native-panels.toon reports its
+    reason instead of blanking the tab.
+    """
+    result: list[dict[str, Any]] = []
+    for d in _rutherford_dirs():
+        scope = "global" if d == _home() / ".rutherford" else "workspace"
+        path = d / native_panels.NATIVE_PANELS_FILENAME
+        meta = _meta(path, scope)
+        entry: dict[str, Any] = {**meta, "panels": []}
+        if path.is_file():
+            try:
+                parsed = native_panels.parse(path.read_text(encoding="utf-8"))
+                entry["panels"] = [_native_panel_view(p) for p in parsed]
+            except (OSError, ValueError) as exc:
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+        result.append(entry)
+    return web.json_response({"platform": _platform_label(), "sources": result})
+
+
+async def _handle_native_panels_write(request: web.Request, ctx: AppContext) -> web.Response:
+    """PUT /rutherford-native-panels?scope=global|workspace — write native-panels.toon.
+
+    NON-reserved base (same rule as the other write routes — Kiro Crew reserves
+    /api/apps/<app>/config). Accepts a JSON body that is a list of native panels or
+    {"panels": [...]}, validates it, then serializes + persists via
+    ``native_panels.atomic_write`` — which re-runs the STRICT parse→serialize→parse
+    round-trip, writes a timestamped .bak, does the atomic temp-file + os.replace,
+    and refuses any path outside a resolved .rutherford scope directory. Returns the
+    re-read payload with ``written: true`` (mirrors the GET shape) so the UI can
+    confirm persistence via written===true or a verify GET.
+    """
+    scope = (request.query.get("scope") or "global").lower()
+    if scope not in ("global", "workspace"):
+        return web.json_response(
+            {"error": f"invalid scope {scope!r}; expected global|workspace"}, status=400
+        )
+    try:
+        try:
+            body = await request.json()
+        except (ValueError, TypeError) as exc:
+            return web.json_response({"error": f"invalid JSON body: {exc}"}, status=400)
+
+        clean, verr = _validate_native_panels_body(body)
+        if verr is not None:
+            return web.json_response({"error": verr}, status=400)
+        assert clean is not None
+
+        path = _native_panels_path_for_scope(scope)
+        # native_panels.atomic_write owns the full write-safety envelope: it refuses
+        # a non native-panels.toon name or a parent outside a resolved .rutherford
+        # scope (path guard), runs the round-trip check, backs up, and writes
+        # atomically. A serialization/round-trip/guard failure surfaces as ValueError.
+        try:
+            native_panels.atomic_write(path, clean)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except OSError as exc:
+            return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=500)
+
+        meta = _meta(path, scope)
+        payload: dict[str, Any] = {**meta, "written": True, "panels": []}
+        try:
+            parsed = native_panels.parse(path.read_text(encoding="utf-8"))
+            payload["panels"] = [_native_panel_view(p) for p in parsed]
+        except (OSError, ValueError) as exc:
+            payload["error"] = f"{type(exc).__name__}: {exc}"
+        return web.json_response(payload)
+    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
+        tb = traceback.format_exc()
+        return web.json_response(
+            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
+        )
+
+
+# --------------------------------------------------------------------------
 # Roles: markdown files (frontmatter + body) round-trip + read/write
 # --------------------------------------------------------------------------
 #
@@ -1557,6 +1803,17 @@ async def _handle_meta(request: web.Request, ctx: AppContext) -> web.Response:
             "persistence": list(_PERSISTENCE),
             "roles": _role_ids(),
             "roles_builtin": list(_BUILTIN_ROLE_IDS),
+            # Native-panels (v3.0.0) option sets for the Native Panels editor:
+            # the five ported native roles, and a documented (non-live) list of
+            # Kiro-spawnable models. native_models_source states honestly that the
+            # model list is NOT live-probed — the editor offers free-text entry and
+            # the native-panel skill validates the real model at run time.
+            "native_roles": list(_NATIVE_ROLE_IDS),
+            "native_models": list(_NATIVE_MODELS),
+            "native_models_source": (
+                "static documented list (kiro-cli chat --list-models not reachable "
+                "from backend; free-text entry, validated by the native-panel skill at run time)"
+            ),
         }
         return web.json_response(payload)
     except Exception as exc:  # noqa: BLE001 — surface swallowed errors
@@ -1768,9 +2025,10 @@ def register_routes(ctx: AppContext) -> list[AppRoute]:
 
     GET routes are read-only. Write routes (PUT) live at NON-reserved paths
     because Kiro Crew reserves /api/apps/<app>/config for its own store:
-      - PUT /rutherford-config  writes config.toml
-      - PUT /rutherford-panels  writes panels.toon
-      - PUT /rutherford-roles   creates/edits/deletes a role .md
+      - PUT /rutherford-config         writes config.toml
+      - PUT /rutherford-panels         writes panels.toon
+      - PUT /rutherford-native-panels  writes native-panels.toon (v3.0.0)
+      - PUT /rutherford-roles          creates/edits/deletes a role .md
     The roles GET+PUT share the /rutherford-roles base (roles GET was moved off
     the bare /roles so the read and write surfaces are coherent). Panels keep
     GET /panels + PUT /rutherford-panels (the GET path is not reserved).
@@ -1783,6 +2041,10 @@ def register_routes(ctx: AppContext) -> list[AppRoute]:
         AppRoute("PUT", "/rutherford-config", _handle_config_write),
         AppRoute("GET", "/panels", _handle_panels),
         AppRoute("PUT", "/rutherford-panels", _handle_panels_write),
+        # Native panels (v3.0.0): read + write native-panels.toon. NON-reserved
+        # base, same as the other write routes.
+        AppRoute("GET", "/rutherford-native-panels", _handle_native_panels),
+        AppRoute("PUT", "/rutherford-native-panels", _handle_native_panels_write),
         AppRoute("GET", "/rutherford-roles", _handle_roles),
         AppRoute("PUT", "/rutherford-roles", _handle_roles_write),
     ]

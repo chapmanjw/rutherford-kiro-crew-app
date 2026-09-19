@@ -11,7 +11,7 @@ import lucide from 'lucide-react'
 // `from 'lucide-react'` imports — add new icons to THIS destructure instead.
 const {
   Box, FileCog, Layers, UserSquare, RefreshCw, AlertTriangle,
-  Save, Plus, X, CheckCircle2, Server, Trash2, Info, Pencil, FileText,
+  Save, Plus, X, CheckCircle2, Server, Trash2, Info, Pencil, FileText, Cpu,
 } = lucide
 
 const BASE = '/api/apps/rutherford'
@@ -43,6 +43,12 @@ type MetaResp = {
   persistence: string[]
   roles: string[]
   roles_builtin: string[]
+  // Native-panels (v3.0.0) option sets. native_models is a documented, NON-live
+  // list (the backend cannot enumerate real Kiro models), so the native seat's
+  // model field is always a free-text combobox seeded with these.
+  native_roles?: string[]
+  native_models?: string[]
+  native_models_source?: string
   error?: string
 }
 
@@ -101,6 +107,43 @@ type PanelsResp = {
 // on a confirmed persist, mirroring the config write contract.
 type PanelsWriteResp = Meta & { panels: PanelRec[]; written?: boolean }
 
+// ---- Native panels (v3.0.0) ------------------------------------------------
+// The all-Kiro-Crew engine. A native seat has NO `cli`; its identity is a REQUIRED
+// `model` (a Kiro-spawnable model name). A panel adds `engine` (must be native)
+// and an optional `reduction`; a seat adds an optional `agent` (default kirocrew).
+// Stored in native-panels.toon, served at GET/PUT /rutherford-native-panels — a
+// SEPARATE surface from panels.toon (the schemas differ, so no mixed mode).
+type NativeSeat = {
+  model: string
+  role?: string
+  label?: string
+  weight?: number | string
+  parity?: boolean
+  stance?: string
+  agent?: string
+}
+
+type NativePanelRec = {
+  name: string
+  description: string
+  engine: string
+  strategy: string
+  reduction?: string
+  targets: number | null
+  seats?: NativeSeat[]
+}
+
+type NativePanelSource = Meta & { panels: NativePanelRec[] }
+
+type NativePanelsResp = {
+  platform: string
+  sources: NativePanelSource[]
+}
+
+// Echoed shape from PUT /rutherford-native-panels — carries written===true on a
+// confirmed persist, mirroring the ACP panels write contract.
+type NativePanelsWriteResp = Meta & { panels: NativePanelRec[]; written?: boolean }
+
 // ---- Roles ----------------------------------------------------------------
 // GET /rutherford-roles (listing): {platform, sources:[{...meta, editable, roles:[
 //   {name,file,path,description?,display_name?}]}], builtin:[{name}]}.
@@ -152,12 +195,13 @@ type RoleWriteResp = {
   error?: string
 }
 
-type Tab = 'status' | 'config' | 'panels' | 'roles'
+type Tab = 'status' | 'config' | 'panels' | 'native' | 'roles'
 
 const TABS: { id: Tab; label: string; icon: typeof Box }[] = [
   { id: 'status', label: 'Overview', icon: Box },
   { id: 'config', label: 'Config', icon: FileCog },
   { id: 'panels', label: 'Panels', icon: Layers },
+  { id: 'native', label: 'Native Panels', icon: Cpu },
   { id: 'roles', label: 'Roles', icon: UserSquare },
 ]
 
@@ -206,6 +250,7 @@ export default function Rutherford() {
   const [configScope, setConfigScope] = useState<'global' | 'workspace'>('global')
   const [config, setConfig] = useState<ConfigResp | null>(null)
   const [panels, setPanels] = useState<PanelsResp | null>(null)
+  const [nativePanels, setNativePanels] = useState<NativePanelsResp | null>(null)
   const [roles, setRoles] = useState<RolesResp | null>(null)
 
   // Latest-wins keyed on the REQUESTED SCOPE, not a monotonic counter. A
@@ -257,12 +302,15 @@ export default function Rutherford() {
     setLoading(true)
     setErr(null)
     try {
-      const [m, s, p, r] = await Promise.all([
+      const [m, s, p, np, r] = await Promise.all([
         // Meta is best-effort: catch so a meta failure degrades dropdowns to
         // free text but never fails the whole load.
         api.get(`${BASE}/rutherford-meta`).catch(() => null),
         api.get(`${BASE}/status`),
         api.get(`${BASE}/panels`),
+        // Native panels (v3.0.0) — best-effort so an older backend without the
+        // route degrades to an empty Native Panels tab instead of failing the load.
+        api.get(`${BASE}/rutherford-native-panels`).catch(() => null),
         // FIX: roles are served at /rutherford-roles (GET+PUT share that base);
         // the old bare /roles path 404s.
         api.get(`${BASE}/rutherford-roles`),
@@ -271,6 +319,9 @@ export default function Rutherford() {
       else setMeta(null)
       setStatus(s as StatusResp)
       setPanels(p as PanelsResp)
+      if (np && typeof np === 'object' && !(np as NativePanelsResp & { error?: string }).error)
+        setNativePanels(np as NativePanelsResp)
+      else setNativePanels(null)
       setRoles(r as RolesResp)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -399,6 +450,54 @@ export default function Rutherford() {
       try {
         const fresh = (await api.get(`${BASE}/panels`)) as PanelsResp | null
         if (fresh && typeof fresh === 'object') setPanels(fresh)
+      } catch {
+        /* non-fatal — the write already confirmed */
+      }
+      return confirmed
+    },
+    [api],
+  )
+
+  // Persist the NATIVE panels list for one scope. Identical confirmed-persistence
+  // discipline to savePanels (the host `put` resolves — does not throw — on a
+  // non-OK response, so require written===true, retry once through a transient
+  // 403, then fall back to a verify GET that confirms the panel-name set landed).
+  // Targets /rutherford-native-panels (native-panels.toon), never the ACP route.
+  const saveNativePanels = useCallback(
+    async (scope: 'global' | 'workspace', panelsBody: NativePanelRec[]) => {
+      const url = `${BASE}/rutherford-native-panels?scope=${scope}`
+      const body = { panels: panelsBody }
+      const wrote = (v: unknown): v is NativePanelsWriteResp =>
+        !!v && typeof v === 'object' && (v as NativePanelsWriteResp).written === true
+
+      let resp: unknown = await api.put(url, body)
+      if (!wrote(resp)) {
+        await new Promise((r) => setTimeout(r, 600))
+        resp = await api.put(url, body)
+      }
+
+      let confirmed: NativePanelsWriteResp | null = wrote(resp) ? (resp as NativePanelsWriteResp) : null
+      if (!confirmed) {
+        const got = (await api.get(`${BASE}/rutherford-native-panels`)) as NativePanelsResp | null
+        const src = got?.sources?.find((s) => s.scope === scope)
+        if (src) {
+          const want = panelsBody.map((p) => p.name).sort()
+          const have = (Array.isArray(src.panels) ? src.panels : []).map((p) => p.name).sort()
+          if (want.length === have.length && want.every((n, i) => n === have[i])) {
+            confirmed = { ...src, written: true }
+          }
+        }
+      }
+
+      if (!confirmed) {
+        throw new Error(
+          'Save could not be confirmed (the write did not persist — likely a transient auth refresh). Your edits were kept; try Save again.',
+        )
+      }
+
+      try {
+        const fresh = (await api.get(`${BASE}/rutherford-native-panels`)) as NativePanelsResp | null
+        if (fresh && typeof fresh === 'object') setNativePanels(fresh)
       } catch {
         /* non-fatal — the write already confirmed */
       }
@@ -582,6 +681,9 @@ export default function Rutherford() {
               />
             )}
             {tab === 'panels' && <PanelsView panels={panels} meta={meta} onSave={savePanels} />}
+            {tab === 'native' && (
+              <NativePanelsView nativePanels={nativePanels} meta={meta} onSave={saveNativePanels} />
+            )}
             {tab === 'roles' && (
               <RolesView roles={roles} meta={meta} onFetchRole={fetchRole} onSave={saveRole} />
             )}
@@ -2116,6 +2218,491 @@ function PanelsView({
               onClick={() => setDrafts((d) => [...(d || []), emptyPanel()])}
             >
               <Plus size={14} /> Add panel
+            </button>
+          </div>
+        )}
+      </Card>
+    </>
+  )
+}
+
+// ---- Native Panels tab (v3.0.0, parity with Panels) ----------------------
+//
+// Mirrors the ACP Panels stack (PanelsView/PanelEditor/SeatEditor) with the
+// native seat schema: NO `cli`; a REQUIRED `model`; `role` limited to the five
+// ported native roles; all seven strategies; an optional `agent` (default
+// kirocrew) and `reduction`. The run-time-only options (min_quorum,
+// require_dissent, synthesize, track_convergence) are deliberately NOT surfaced
+// as fields — they are passed at run time, not stored (reference/native-panels.md).
+
+// Native seat text fields rendered as plain inputs (model + role are special).
+const NATIVE_SEAT_TEXT_FIELDS: { key: keyof NativeSeat; label: string; placeholder: string }[] = [
+  { key: 'label', label: 'label', placeholder: 'result key (default: the model)' },
+  { key: 'stance', label: 'stance', placeholder: 'for / against / neutral' },
+  { key: 'agent', label: 'agent', placeholder: 'kirocrew (default)' },
+]
+
+function cloneNativePanel(p: NativePanelRec): NativePanelRec {
+  return {
+    ...p,
+    seats: (Array.isArray(p.seats) ? p.seats : []).map((s) => ({ ...s })),
+  }
+}
+
+function emptyNativePanel(): NativePanelRec {
+  return {
+    name: '',
+    description: '',
+    engine: 'native',
+    strategy: 'all-voices',
+    reduction: '',
+    targets: 1,
+    seats: [{ model: '' }],
+  }
+}
+
+// Build the write body: engine is ALWAYS native (no mixed mode), empty optional
+// seat fields are stripped so no blank key serializes, and `model` is always kept.
+function nativePanelsToBody(drafts: NativePanelRec[]): NativePanelRec[] {
+  return drafts.map((p) => ({
+    name: p.name.trim(),
+    description: (p.description || '').trim(),
+    engine: 'native',
+    strategy: (p.strategy || '').trim(),
+    reduction: (p.reduction || '').trim(),
+    targets: (p.seats || []).length,
+    seats: (p.seats || []).map((s) => {
+      const out: NativeSeat = { model: String(s.model || '').trim() }
+      if (s.role && String(s.role).trim()) out.role = String(s.role).trim()
+      if (s.label && String(s.label).trim()) out.label = String(s.label).trim()
+      if (s.stance && String(s.stance).trim()) out.stance = String(s.stance).trim()
+      if (s.agent && String(s.agent).trim()) out.agent = String(s.agent).trim()
+      if (s.weight !== undefined && s.weight !== null && String(s.weight).trim() !== '')
+        out.weight = Number(s.weight)
+      if (s.parity === true) out.parity = true
+      return out
+    }),
+  }))
+}
+
+function NativeSeatEditor({
+  seat,
+  meta,
+  index,
+  onChange,
+  onRemove,
+}: {
+  seat: NativeSeat
+  meta: MetaResp | null
+  index: number
+  onChange: (s: NativeSeat) => void
+  onRemove: () => void
+}) {
+  const set = (k: keyof NativeSeat, v: string) => onChange({ ...seat, [k]: v })
+  // Models are never a live roster — always a free-text combobox seeded with the
+  // documented list (the native-panel skill validates the real model at run time).
+  const models = Array.isArray(meta?.native_models) ? meta!.native_models : []
+  const nativeRoles = Array.isArray(meta?.native_roles) ? meta!.native_roles : []
+  return (
+    <div className="p-2.5 rounded bg-[var(--surface-3,#232323)] border border-[var(--border,#2a2a2a)]">
+      <div className="grid gap-2 grid-cols-[repeat(auto-fit,minmax(140px,1fr))]">
+        {/* model — REQUIRED. Free-text combobox seeded with the documented list. */}
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">
+            model<span className="text-amber-500"> *</span>
+          </span>
+          <ComboSelect
+            value={seat.model != null ? String(seat.model) : ''}
+            options={models}
+            freeText
+            listId={`nseat-model-${index}`}
+            placeholder="Kiro model (required)"
+            onChange={(v) => set('model', v)}
+          />
+        </label>
+        {/* role — limited to the five ported native roles (+ none). Keep an
+            unknown loaded value selectable so it round-trips. */}
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">role</span>
+          <select
+            className={inputCls}
+            value={seat.role != null ? String(seat.role) : ''}
+            onChange={(e) => set('role', e.target.value)}
+          >
+            <option value="">(none)</option>
+            {seat.role && !nativeRoles.includes(String(seat.role)) && (
+              <option value={String(seat.role)}>{String(seat.role)}</option>
+            )}
+            {nativeRoles.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </label>
+        {/* label + stance + agent — free text */}
+        {NATIVE_SEAT_TEXT_FIELDS.map((f) => (
+          <label key={f.key as string} className="flex flex-col gap-0.5">
+            <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">{f.label}</span>
+            <input
+              className={inputCls}
+              value={seat[f.key] != null ? String(seat[f.key]) : ''}
+              placeholder={f.placeholder}
+              onChange={(e) => set(f.key, e.target.value)}
+            />
+          </label>
+        ))}
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">weight</span>
+          <input
+            className={inputCls}
+            type="number"
+            value={seat.weight != null ? String(seat.weight) : ''}
+            placeholder="—"
+            onChange={(e) => {
+              const v = e.target.value.trim()
+              const next = { ...seat }
+              if (v === '') delete next.weight
+              else next.weight = Number(v)
+              onChange(next)
+            }}
+          />
+        </label>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">parity</span>
+          <span className="mt-0.5">
+            <Switch
+              value={seat.parity === true}
+              srLabel="Parity counterweight seat"
+              onChange={(v) => {
+                const next = { ...seat }
+                if (v) next.parity = true
+                else delete next.parity
+                onChange(next)
+              }}
+            />
+          </span>
+        </div>
+      </div>
+      <button
+        className="mt-1.5 flex items-center gap-1 text-[11px] text-muted hover:text-amber-500"
+        onClick={onRemove}
+        title="Remove seat"
+      >
+        <X size={12} /> Remove seat
+      </button>
+    </div>
+  )
+}
+
+function NativePanelEditor({
+  panel,
+  meta,
+  onChange,
+  onDelete,
+}: {
+  panel: NativePanelRec
+  meta: MetaResp | null
+  onChange: (p: NativePanelRec) => void
+  onDelete: () => void
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const seats = Array.isArray(panel.seats) ? panel.seats : []
+  const strategies = Array.isArray(meta?.strategies) && meta!.strategies.length
+    ? meta!.strategies : FALLBACK_STRATEGIES
+  return (
+    <div className="p-3 rounded bg-[var(--surface-2,#1e1e1e)] border border-[var(--border,#2a2a2a)]">
+      <div className="grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
+        <Field label="Name" hint="panel key" required>
+          <input
+            className={inputCls}
+            value={panel.name}
+            placeholder="panel-name"
+            onChange={(e) => onChange({ ...panel, name: e.target.value })}
+          />
+        </Field>
+        <Field
+          label="Strategy"
+          hint="strategy"
+          help="How the native panel's voices are reduced. all-voices returns every voice; the rest collapse to one verdict (unanimous, majority, plurality, weighted, parity-pair, rank)."
+        >
+          <select
+            className={inputCls}
+            value={panel.strategy || 'all-voices'}
+            onChange={(e) => onChange({ ...panel, strategy: e.target.value })}
+          >
+            {/* Keep an unknown loaded strategy selectable. */}
+            {panel.strategy && !strategies.includes(panel.strategy) && (
+              <option value={panel.strategy}>{panel.strategy}</option>
+            )}
+            {strategies.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="mt-2.5 grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
+        <Field label="Description" hint="description">
+          <input
+            className={inputCls}
+            value={panel.description || ''}
+            placeholder="Human label for this panel"
+            onChange={(e) => onChange({ ...panel, description: e.target.value })}
+          />
+        </Field>
+        <Field
+          label="Reduction"
+          hint="reduction"
+          help="Optional free-text note steering how the skill reduces/reports (a synthesis hint). Advisory — the strategy drives the vote math."
+        >
+          <input
+            className={inputCls}
+            value={panel.reduction || ''}
+            placeholder="optional synthesis hint"
+            onChange={(e) => onChange({ ...panel, reduction: e.target.value })}
+          />
+        </Field>
+      </div>
+      <p className="text-[11px] text-muted mt-1.5">
+        <code>engine</code> is fixed to <code>native</code> for every panel here — that is what
+        routes it through Kiro <code>spawn_run</code> instead of an external ACP agent.
+      </p>
+
+      <div className="mt-3">
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="text-xs font-medium text-[var(--fg,#eee)]">
+            Seats <span className="text-muted">({seats.length})</span>
+          </span>
+        </div>
+        <div className="flex flex-col gap-2">
+          {seats.map((s, i) => (
+            <NativeSeatEditor
+              key={i}
+              seat={s}
+              meta={meta}
+              index={i}
+              onChange={(ns) => {
+                const next = seats.slice()
+                next[i] = ns
+                onChange({ ...panel, seats: next })
+              }}
+              onRemove={() => onChange({ ...panel, seats: seats.filter((_, j) => j !== i) })}
+            />
+          ))}
+          <button
+            className="flex items-center gap-1.5 px-2 py-1.5 text-sm text-muted hover:text-[var(--accent,#6366f1)] self-start"
+            onClick={() => onChange({ ...panel, seats: [...seats, { model: '' }] })}
+          >
+            <Plus size={14} /> Add seat
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-3 pt-2.5 border-t border-[var(--border,#2a2a2a)] flex items-center">
+        {!confirmDelete ? (
+          <button
+            className="flex items-center gap-1.5 text-xs text-muted hover:text-amber-500"
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 size={13} /> Delete panel
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-amber-500">Delete “{panel.name || 'unnamed'}”?</span>
+            <button
+              className="px-2 py-0.5 rounded bg-amber-600/80 text-white hover:bg-amber-600"
+              onClick={onDelete}
+            >
+              Delete
+            </button>
+            <button className="px-2 py-0.5 rounded text-muted hover:text-[var(--fg,#eee)]" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function NativePanelsView({
+  nativePanels,
+  meta,
+  onSave,
+}: {
+  nativePanels: NativePanelsResp | null
+  meta: MetaResp | null
+  onSave: (scope: 'global' | 'workspace', body: NativePanelRec[]) => Promise<NativePanelsWriteResp>
+}) {
+  const [scope, setScope] = useState<'global' | 'workspace'>('global')
+  const [drafts, setDrafts] = useState<NativePanelRec[] | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [savedScope, setSavedScope] = useState<'global' | 'workspace' | null>(null)
+
+  const sources = Array.isArray(nativePanels?.sources) ? nativePanels!.sources : []
+  const source = sources.find((s) => s.scope === scope) || null
+  const sourceKey = JSON.stringify(source?.panels ?? null) + '|' + scope
+  const modelsNote = String(meta?.native_models_source || '')
+
+  useEffect(() => {
+    if (!source) {
+      setDrafts(null)
+      return
+    }
+    setSaveMsg(null)
+    setDrafts((source.panels || []).map(cloneNativePanel))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey])
+
+  const patchPanel = (i: number, p: NativePanelRec) =>
+    setDrafts((d) => (d ? d.map((x, j) => (j === i ? p : x)) : d))
+
+  const validationError = (): string | null => {
+    if (!drafts) return null
+    const names = new Set<string>()
+    for (const p of drafts) {
+      const n = p.name.trim()
+      if (!n) return 'Every panel needs a name.'
+      if (names.has(n)) return `Duplicate panel name “${n}”.`
+      names.add(n)
+      const seats = Array.isArray(p.seats) ? p.seats : []
+      if (seats.length === 0) return `Panel “${n}” needs at least one seat.`
+      if (seats.some((s) => !String(s.model || '').trim()))
+        return `Panel “${n}” has a seat missing a model (a native seat's model is required).`
+    }
+    return null
+  }
+
+  const handleSave = async () => {
+    if (!drafts) return
+    const verr = validationError()
+    if (verr) {
+      setSaveMsg({ ok: false, text: verr })
+      return
+    }
+    setSaving(true)
+    setSaveMsg(null)
+    setSavedScope(null)
+    try {
+      await onSave(scope, nativePanelsToBody(drafts))
+      setSaveMsg({ ok: true, text: `Saved to ${scope} native-panels.toon (backup written).` })
+      setSavedScope(scope)
+    } catch (e) {
+      setSaveMsg({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="flex items-center gap-1 mb-4">
+        {(['global', 'workspace'] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => { setSavedScope(null); setScope(s) }}
+            className={
+              'px-3 py-1.5 text-sm rounded transition-colors ' +
+              (scope === s
+                ? 'bg-[var(--accent,#6366f1)] text-white'
+                : 'bg-[var(--surface-2,#2a2a2a)] text-muted hover:text-[var(--fg,#eee)]')
+            }
+          >
+            {s === 'global' ? 'Global' : 'Workspace'}
+          </button>
+        ))}
+        <button
+          onClick={() => void handleSave()}
+          disabled={saving || !drafts}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-[var(--accent,#6366f1)] text-white disabled:opacity-50"
+        >
+          <Save size={14} /> {saving ? 'Saving…' : `Save ${scope}`}
+        </button>
+      </div>
+
+      {/* Run-time options are NOT panel-file keys — say so once, up front. */}
+      <div className="flex items-start gap-2 text-sm mb-4 rounded border border-[var(--border,#333)] bg-[var(--surface-2,#2a2a2a)] px-3 py-2.5">
+        <Info size={15} className="mt-0.5 shrink-0 text-[var(--accent,#6366f1)]" />
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[var(--fg,#eee)]">
+            Native panels run entirely inside Kiro Crew — every seat is a{' '}
+            <code>spawn_run</code> at its <code>model</code>, aggregated by the{' '}
+            <code>native-panel</code> skill. No external ACP agent launches.
+          </span>
+          <span className="text-xs text-muted">
+            <code>min_quorum</code>, <code>require_dissent</code>, <code>synthesize</code>, and{' '}
+            <code>track_convergence</code> are RUN-TIME options passed when you run the panel — not
+            stored here — so they are not editable fields.
+          </span>
+          {modelsNote && (
+            <span className="text-xs text-muted">
+              Model list: {modelsNote}. Type any Kiro-spawnable model; it is validated at run time.
+            </span>
+          )}
+        </div>
+      </div>
+
+      {saveMsg && (
+        <div
+          className={
+            'flex items-center gap-2 text-sm mb-4 ' +
+            (saveMsg.ok ? 'text-green-500' : 'text-amber-500')
+          }
+        >
+          {saveMsg.ok ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+          {saveMsg.text}
+        </div>
+      )}
+
+      {savedScope === scope && (
+        <div className="flex items-start gap-2 text-sm mb-4 rounded border border-[var(--border,#333)] bg-[var(--surface-2,#2a2a2a)] px-3 py-2.5">
+          <Info size={15} className="mt-0.5 shrink-0 text-[var(--accent,#6366f1)]" />
+          <span className="text-[var(--fg,#eee)]">
+            Written to disk. Unlike ACP panels, there is no running server to reload — the{' '}
+            <code>native-panel</code> skill reads <code>native-panels.toon</code> fresh on its next
+            run, so your change takes effect the next time you run a native panel.
+          </span>
+        </div>
+      )}
+
+      <Card>
+        <CardTitle>Native panels · {scope}</CardTitle>
+        {source && <PathChip meta={source} />}
+        {source?.error && <p className="text-xs text-amber-500 mt-1">{source.error}</p>}
+        {source && !source.exists && (
+          <p className="text-xs text-muted mt-2">
+            No file at this scope yet — saving creates <code>{source.path}</code>.
+          </p>
+        )}
+
+        {drafts === null ? (
+          <p className="text-sm text-muted mt-2">
+            {nativePanels ? `Loading ${scope} native panels…` : 'Native panels route unavailable.'}
+          </p>
+        ) : (
+          <div className="mt-3 flex flex-col gap-3">
+            {drafts.length === 0 && (
+              <p className="text-sm text-muted">
+                No native panels defined at this scope. Add one below.
+              </p>
+            )}
+            {drafts.map((p, i) => (
+              <NativePanelEditor
+                key={i}
+                panel={p}
+                meta={meta}
+                onChange={(np) => patchPanel(i, np)}
+                onDelete={() => setDrafts((d) => (d ? d.filter((_, j) => j !== i) : d))}
+              />
+            ))}
+            <button
+              className="flex items-center gap-1.5 px-2 py-1.5 text-sm text-muted hover:text-[var(--accent,#6366f1)] self-start"
+              onClick={() => setDrafts((d) => [...(d || []), emptyNativePanel()])}
+            >
+              <Plus size={14} /> Add native panel
             </button>
           </div>
         )}
