@@ -57,10 +57,25 @@ from kiro_crew.apps.route_registry import AppRoute
 # module (``backend.routes``, the gateway's ``backend.routes:register_routes``
 # entry) or as a bare module on sys.path (the test/validator harness that adds
 # ``backend/`` to the path), so the native-panels routes work under both.
-try:  # pragma: no cover - exercised implicitly by both load styles
-    from backend import native_panels  # type: ignore
-except ImportError:  # loaded as a top-level module (backend/ on sys.path)
-    import native_panels  # type: ignore
+try:  # pragma: no cover - exercised implicitly by all three load styles
+    from backend import native_panels  # normal package import (validator/harness)
+except ImportError:
+    try:
+        import native_panels  # type: ignore  # backend/ on sys.path (some harnesses)
+    except ImportError:
+        # The gateway's route_registry executes routes.py BY FILE PATH with no
+        # ``backend`` package context and backend/ NOT on sys.path, so neither
+        # import above resolves. Load the sibling module explicitly, relative to
+        # this file's own __file__, so it works no matter how routes.py is loaded.
+        import importlib.util as _ilu
+        from pathlib import Path as _P
+
+        _np_path = _P(__file__).resolve().parent / "native_panels.py"
+        _spec = _ilu.spec_from_file_location("rutherford_native_panels", _np_path)
+        if _spec is None or _spec.loader is None:  # pragma: no cover - defensive
+            raise ImportError(f"cannot load native_panels from {_np_path}")
+        native_panels = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(native_panels)
 
 _LOG = logging.getLogger("rutherford.routes")
 

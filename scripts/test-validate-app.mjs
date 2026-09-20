@@ -514,6 +514,29 @@ testCase(
   /rutherford-roles/i,
 );
 
+// (oo) native_panels import reverted to the fragile two-branch form -> fail (static guard).
+//      Rewrites routes.py's path-robust importlib block back to the pre-fix
+//      `from backend import native_panels` / `import native_panels` pair. Under the gateway's
+//      file-path load that pair raises ImportError and register_routes never runs (blanket 404),
+//      so validate-app.mjs's static tripwire must reject it. Falsifiable for exactly that guard.
+testCase(
+  "(oo) fragile two-branch native_panels import fails (path-robust static guard)",
+  "fail",
+  (dir) => {
+    const t = readRoutes(dir).replace(
+      /try:  # pragma: no cover - exercised implicitly by all three load styles[\s\S]*?_spec\.loader\.exec_module\(native_panels\)/,
+      [
+        "try:  # reverted to the pre-fix fragile form",
+        "    from backend import native_panels  # type: ignore",
+        "except ImportError:",
+        "    import native_panels  # type: ignore",
+      ].join("\n"),
+    );
+    writeRoutes(dir, t);
+  },
+  /path-robust/i,
+);
+
 // --- F5: roles-path BEHAVIORAL tests (guard FIX 1 delete-verification + FIX 2 frontmatter round-trip) ---
 //
 // These are FALSIFIABLE behavior tests, not registration checks: each fails if the
@@ -1035,6 +1058,79 @@ behaviorCase("(nn) write-guard test is falsifiable (reverting to hardcoded confi
     throw new Error(
       "the pre-fix hardcoded-name guard did NOT reject a rutherford.toml resolver target — (mm) would be vacuous. Output: " + out.trim(),
     );
+  }
+});
+
+console.log("\nGateway-load behavior tests:\n");
+
+// (pp) REAL runtime reproduction of the gateway's path-based load (guards the blanket-404 FIX).
+//      Runs the standalone tests/test_route_loading.py, which spec_from_file_location-loads
+//      backend/routes.py with backend/ NOT on sys.path — exactly as kiro_crew.apps.route_registry
+//      does — and asserts register_routes() returns the full route table (/status, /rutherford-meta,
+//      /rutherford-native-panels, /rutherford-panels, /rutherford-roles) without raising. This is
+//      the PRIMARY guard, run here so a regression is caught in CI, not just live.
+behaviorCase("(pp) routes.py loads under the gateway's path-based execution (real runtime test)", () => {
+  const py = resolvePython();
+  if (!py) throw new Error("no Python interpreter found (python/py/python3)");
+  const testPath = join(repoRoot, "tests", "test_route_loading.py");
+  if (!existsSync(testPath)) throw new Error(`missing ${testPath}`);
+  let out;
+  try {
+    out = execFileSync(py, [testPath], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    const msg = ((e.stdout || "") + (e.stderr || "")).toString();
+    throw new Error(`route-loading test did not pass:\n${msg.trim()}`);
+  }
+  if (!/route_loading tests: \d+\/\d+ passed/.test(out) || /failed/.test(out)) {
+    throw new Error(`unexpected route-loading test output: ${out.trim()}`);
+  }
+});
+
+// (qq) FALSIFIABILITY self-check for (pp): revert ONLY the native_panels import in a throwaway copy
+//      to the pre-fix two-branch form and run the SAME test against it. It MUST fail — and fail with
+//      the native_panels ImportError (the exact gateway symptom), not an unrelated error. If the
+//      reverted copy still passed, (pp) would be vacuous.
+behaviorCase("(qq) route-loading test is falsifiable (old two-branch import makes it fail on native_panels)", () => {
+  const py = resolvePython();
+  if (!py) throw new Error("no Python interpreter found (python/py/python3)");
+  const dir = mkdtempSync(join(tmpdir(), "rutherford-routeload-rev-"));
+  try {
+    cpSync(join(repoRoot, "backend"), join(dir, "backend"), { recursive: true });
+    cpSync(join(repoRoot, "tests"), join(dir, "tests"), { recursive: true });
+    const routesCopy = join(dir, "backend", "routes.py");
+    const original = readFileSync(routesCopy, "utf8");
+    const reverted = original.replace(
+      /try:  # pragma: no cover - exercised implicitly by all three load styles[\s\S]*?_spec\.loader\.exec_module\(native_panels\)/,
+      [
+        "try:  # reverted to the pre-fix fragile form",
+        "    from backend import native_panels  # type: ignore",
+        "except ImportError:",
+        "    import native_panels  # type: ignore",
+      ].join("\n"),
+    );
+    if (reverted === original) {
+      throw new Error("could not locate the path-robust import block to revert — check the regex");
+    }
+    writeFileSync(routesCopy, reverted);
+    let threw = false;
+    let out = "";
+    try {
+      execFileSync(py, [join(dir, "tests", "test_route_loading.py")], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (e) {
+      threw = true;
+      out = ((e.stdout || "") + (e.stderr || "")).toString();
+    }
+    if (!threw) {
+      throw new Error("reverting to the two-branch import did NOT fail the test — (pp) would be vacuous");
+    }
+    if (!/native_panels/.test(out)) {
+      throw new Error(`test failed for the wrong reason (expected a native_panels ImportError):\n${out.trim()}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

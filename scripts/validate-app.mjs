@@ -537,6 +537,32 @@ function enforceBackendRouteContract() {
     }
   }
 
+  // Path-robust native_panels import (static tripwire for the blanket-404 fix). The gateway's
+  // route_registry executes routes.py BY FILE PATH with no `backend` package context and backend/
+  // NOT on sys.path, so a two-branch `from backend import native_panels` / `import native_panels`
+  // raises ImportError at import time — register_routes never runs and EVERY backend route 404s.
+  // The import must carry an importlib path-based fallback that loads the sibling native_panels.py
+  // from routes.py's own __file__. The genuine runtime reproduction lives in
+  // tests/test_route_loading.py and is exercised in CI by test-validate-app.mjs (cases (oo)-(qq));
+  // this is the cheap always-on static guard so a revert to the fragile form fails CI here too.
+  const importsNativePanels =
+    /(?:^|\n)\s*import\s+native_panels\b/.test(text) ||
+    /from\s+backend\s+import\s+native_panels/.test(text);
+  if (importsNativePanels) {
+    const hasPathFallback =
+      /spec_from_file_location/.test(text) &&
+      /native_panels\.py/.test(text) &&
+      /exec_module/.test(text);
+    if (!hasPathFallback) {
+      fail(
+        `${rel}: the native_panels import is NOT path-robust. The gateway executes routes.py by file ` +
+          `path with no "backend" package and backend/ NOT on sys.path, so a package/sys.path import ` +
+          `raises ImportError and register_routes never runs (blanket 404). Add an importlib ` +
+          `spec_from_file_location fallback that loads the sibling native_panels.py from __file__.`,
+      );
+    }
+  }
+
   // The Overview "Reachability" card renders the backend's reachability note
   // verbatim. It must present configured state honestly, never a developer
   // placeholder, and must never claim live reachability (available:true) from a
