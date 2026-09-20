@@ -4,6 +4,23 @@ All notable changes to this app are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-09-18
+
+### Added
+- Native Kiro panel engine — run a whole Rutherford panel inside Kiro Crew as `spawn_run` subagents, one model per seat, with no external ACP CLI launches and no Rutherford MCP call anywhere on the native path. Opt in per panel by setting `engine: native`.
+- Native panels live in their own `native-panels.toon` store, kept separate from the MCP `panels.toon`. It is discovered across `~/.rutherford/`, `<cwd>/.rutherford/`, and `$RUTHERFORD_CONFIG_DIR`, with the highest-precedence scope winning.
+- All seven aggregation strategies run natively: `all-voices`, `unanimous`, `majority`, `plurality`, `weighted`, `parity-pair`, and `rank` (a two-round anonymized Borda count with a pairwise agreement matrix). Vote math is computed deterministically.
+- Native multi-round debate: each seat opens as a durable session and is continued across rounds, cross-pollinating the other seats' positions, with convergence and stall detection.
+- New `native-panel` skill that walks the orchestrator through the full lifecycle — resolve, validate, fan-out, collect, reduce, report — with strict author-time validation. An unknown model, unknown role, bad strategy, or non-native engine each fails clearly, with no silent fallback to the MCP path.
+- `backend/native_panels.py`, a strict, round-trip-safe TOON serializer and parser for `native-panels.toon` (timestamped `.bak`, atomic write, and a path-traversal guard); `reference/native-panels.md`, the schema reference; `reference/roles-native.md`, the built-in role prompts ported for native seats; and `examples/native-panels.toon`, a set of starter panels.
+
+### Changed
+- `agents/rutherford-orchestrator.prompt.md` — adds the native-panel routing rule and an explicit no-mixed-mode guard: a panel is either entirely native or entirely MCP, and any ACP CLI seat forces the whole panel onto the MCP path.
+
+### Not changed
+- The existing MCP path is fully preserved and untouched: `panels.toon`, `reload_panels`, and the `consensus`, `debate`, `review`, `delegate`, and `plan` tools behave exactly as before. Native is purely additive.
+- `discount_correlated` is not implemented on the native path in v3; it remains available on the MCP path.
+
 ## [2.2.0] - 2026-09-18
 
 ### Changed
@@ -92,6 +109,7 @@ Kiro Crew app format.
   install from a local checkout (`git clone` then `kirocrew app install <path>`) — both behind a trust
   grant.
 
+[3.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v3.0.0
 [2.2.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.2.0
 [2.1.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.1.0
 [2.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.0.0

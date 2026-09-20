@@ -1,0 +1,535 @@
+#!/usr/bin/env python3
+"""Behavior tests for ``backend/native_panels.py`` (v3.0.0 native panel engine).
+
+Standalone, stdlib-only, no pytest — run it directly:
+
+    python tests/test_native_panels.py
+
+Exits non-zero on the first failing assertion group and prints a pass/fail
+count, matching the repo's ``scripts/test-validate-app.mjs`` convention. Covers
+the strict parser, the byte-for-byte round-trip, the missing-root guard added
+by the review panel, scope discovery, and the atomic writer's path guard + .bak.
+"""
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+EXAMPLE = REPO_ROOT / "examples" / "native-panels.toon"
+
+
+def _load_module():
+    """Import backend/native_panels.py directly (no package __init__)."""
+    path = REPO_ROOT / "backend" / "native_panels.py"
+    spec = importlib.util.spec_from_file_location("native_panels", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+np = _load_module()
+
+# --------------------------------------------------------------------------
+# Tiny assertion harness
+# --------------------------------------------------------------------------
+
+_passed = 0
+_failed = 0
+
+
+def check(label: str, cond: bool) -> None:
+    global _passed, _failed
+    if cond:
+        _passed += 1
+    else:
+        _failed += 1
+        print(f"  FAIL: {label}")
+
+
+def expect_valueerror(label: str, fn) -> None:
+    """Pass iff calling ``fn`` raises ValueError."""
+    global _passed, _failed
+    try:
+        fn()
+    except ValueError:
+        _passed += 1
+        return
+    except Exception as exc:  # wrong error type is still a failure
+        _failed += 1
+        print(f"  FAIL: {label} — raised {type(exc).__name__}, expected ValueError")
+        return
+    _failed += 1
+    print(f"  FAIL: {label} — no error raised, expected ValueError")
+
+
+# --------------------------------------------------------------------------
+# Round-trip: the shipped example, byte-for-byte
+# --------------------------------------------------------------------------
+
+def test_example_roundtrip() -> None:
+    text = EXAMPLE.read_text(encoding="utf-8")
+    check("example parses to 3 panels", len(np.parse(text)) == 3)
+    check("serialize(parse(example)) == example byte-for-byte",
+          np.serialize(np.parse(text)) == text)
+    check("roundtrip_ok(example)", np.roundtrip_ok(text))
+
+
+# --------------------------------------------------------------------------
+# Round-trip: edge cases (int weight, bool parity, stance, quoted model)
+# --------------------------------------------------------------------------
+
+EDGE = (
+    "native-panels:\n"
+    "  edge:\n"
+    "    description: Edge cases.\n"
+    "    engine: native\n"
+    "    strategy: weighted\n"
+    "    targets[1]:\n"
+    '      - model: "vendor:model-x"\n'
+    "        role: architect\n"
+    "        label: v1\n"
+    "        weight: 2\n"
+    "        parity: true\n"
+    "        stance: for\n"
+    "        agent: kirocrew\n"
+)
+
+
+def test_edge_roundtrip() -> None:
+    parsed = np.parse(EDGE)
+    check("edge serialize(parse(x)) == x byte-for-byte", np.serialize(parsed) == EDGE)
+    seat = parsed[0]["targets"][0]
+    check("quoted model preserved (colon)", seat["model"] == "vendor:model-x")
+    check("int weight parses to int 2", seat["weight"] == 2 and isinstance(seat["weight"], int))
+    check("bool parity parses to True", seat["parity"] is True)
+    check("stance parses to 'for'", seat["stance"] == "for")
+
+
+# --------------------------------------------------------------------------
+# Finding 1: embedded control chars (newline/tab/CR) survive the round-trip
+# --------------------------------------------------------------------------
+
+# A description that arrives via the documented escape syntax parses to a value
+# holding a REAL newline (and tab, and CR). The serializer must re-emit it quoted
+# and escaped, not as a bare scalar with a literal control char (which would
+# corrupt the TOON structure and make the next parse raise "unexpected line").
+CTRL = (
+    "native-panels:\n"
+    "  ctrl:\n"
+    '    description: "line one\\nline two\\ttabbed\\rreturn"\n'
+    "    engine: native\n"
+    "    targets[1]:\n"
+    "      - model: m\n"
+)
+
+
+def test_control_char_roundtrip() -> None:
+    parsed = np.parse(CTRL)
+    desc = parsed[0]["description"]
+    check("escaped \\n decodes to a real newline", "\n" in desc)
+    check("escaped \\t decodes to a real tab", "\t" in desc)
+    check("escaped \\r decodes to a real carriage return", "\r" in desc)
+
+    # The re-serialized text must re-parse (no corruption) and be structurally
+    # identical — the whole point of Finding 1.
+    text2 = np.serialize(parsed)
+    check("serialized control-char value re-parses without error",
+          np.parse(text2) is not None)
+    check("parse(serialize(x)) preserves the control-char value",
+          np.parse(text2)[0]["description"] == desc)
+    check("roundtrip_ok holds for a control-char value", np.roundtrip_ok(CTRL))
+
+    # serialize(parse(x)) is idempotent: a second round-trip is a fixed point.
+    check("serialize is a fixed point on the re-parsed value",
+          np.serialize(np.parse(text2)) == text2)
+
+    # And the emitted scalar is quoted+escaped, never a bare literal newline.
+    check("no bare literal newline leaked into a value line",
+          all(("\t" not in ln and "\r" not in ln) for ln in text2.splitlines()))
+
+
+def test_control_char_via_structured_input() -> None:
+    # A value built in memory with real control chars (not via the file) must
+    # also serialize->parse cleanly — this is what a programmatic writer produces.
+    panels = [{
+        "name": "prog",
+        "engine": "native",
+        "description": "a\nb\tc\rd",
+        "targets": [{"model": "m"}],
+    }]
+    text = np.serialize(panels)
+    check("in-memory control chars re-parse", np.parse(text) is not None)
+    check("in-memory control-char description preserved",
+          np.parse(text)[0]["description"] == "a\nb\tc\rd")
+
+
+# --------------------------------------------------------------------------
+# Strict parse errors
+# --------------------------------------------------------------------------
+
+def test_parse_errors() -> None:
+    empty_targets = (
+        "native-panels:\n  p:\n    engine: native\n    targets[0]:\n"
+    )
+    expect_valueerror("empty targets list rejected", lambda: np.parse(empty_targets))
+
+    unknown_top = (
+        "native-panels:\n  p:\n    engine: native\n    bogus: x\n"
+        "    targets[1]:\n      - model: m\n"
+    )
+    expect_valueerror("unknown panel key rejected", lambda: np.parse(unknown_top))
+
+    unknown_seat = (
+        "native-panels:\n  p:\n    engine: native\n    targets[1]:\n"
+        "      - model: m\n        bogus: x\n"
+    )
+    expect_valueerror("unknown seat key rejected", lambda: np.parse(unknown_seat))
+
+    no_model = (
+        "native-panels:\n  p:\n    engine: native\n    targets[1]:\n"
+        "      - role: architect\n"
+    )
+    expect_valueerror("seat missing model rejected", lambda: np.parse(no_model))
+
+    bad_engine = (
+        "native-panels:\n  p:\n    engine: mcp\n    targets[1]:\n      - model: m\n"
+    )
+    expect_valueerror("engine != native rejected", lambda: np.parse(bad_engine))
+
+    bad_strategy = (
+        "native-panels:\n  p:\n    engine: native\n    strategy: bogus\n"
+        "    targets[1]:\n      - model: m\n"
+    )
+    expect_valueerror("unknown strategy rejected", lambda: np.parse(bad_strategy))
+
+    neg_weight = (
+        "native-panels:\n  p:\n    engine: native\n    targets[1]:\n"
+        "      - model: m\n        weight: -1\n"
+    )
+    expect_valueerror("negative weight rejected", lambda: np.parse(neg_weight))
+
+
+# --------------------------------------------------------------------------
+# Finding 3: parser rejects duplicate targets / duplicate key / count mismatch
+# --------------------------------------------------------------------------
+
+def test_parser_hardening() -> None:
+    dup_targets = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n"
+        "    targets[1]:\n      - model: b\n"
+    )
+    expect_valueerror("duplicate targets declaration rejected",
+                      lambda: np.parse(dup_targets))
+
+    dup_key = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    strategy: majority\n    strategy: unanimous\n"
+        "    targets[1]:\n      - model: a\n"
+    )
+    expect_valueerror("duplicate panel key rejected", lambda: np.parse(dup_key))
+
+    dup_description = (
+        "native-panels:\n  p:\n    description: one\n    description: two\n"
+        "    engine: native\n    targets[1]:\n      - model: a\n"
+    )
+    expect_valueerror("duplicate description key rejected",
+                      lambda: np.parse(dup_description))
+
+    # Declared count higher than the seats present (a seat "dropped").
+    count_high = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[3]:\n      - model: a\n"
+    )
+    expect_valueerror("targets[3] with 1 seat rejected (mismatch)",
+                      lambda: np.parse(count_high))
+
+    # Declared count lower than the seats present.
+    count_low = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n      - model: b\n"
+    )
+    expect_valueerror("targets[1] with 2 seats rejected (mismatch)",
+                      lambda: np.parse(count_low))
+
+    # A correct count still parses (guard against over-strictness).
+    ok = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[2]:\n      - model: a\n      - model: b\n"
+    )
+    check("matching targets[2] with 2 seats parses",
+          len(np.parse(ok)[0]["targets"]) == 2)
+
+    # A non-integer count is a malformed header.
+    bad_count = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[x]:\n      - model: a\n"
+    )
+    expect_valueerror("non-integer targets count rejected",
+                      lambda: np.parse(bad_count))
+
+    # A duplicate seat key (``- model: a`` then ``model: b``) silently kept ``b``
+    # before the fix — a STRICT parser must reject it, like the panel-level guard.
+    dup_seat_key = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n        model: b\n"
+    )
+    expect_valueerror("duplicate seat key rejected", lambda: np.parse(dup_seat_key))
+
+    # Garbage after the ``targets[N]`` bracket must not parse as a valid header.
+    targets_junk = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]junk:\n      - model: a\n"
+    )
+    expect_valueerror("targets[1]junk header rejected", lambda: np.parse(targets_junk))
+
+
+def test_indentation_columns() -> None:
+    """Seat rows must sit at column 6 and continuation keys at column 8; a
+    dedented or over-indented line is a structural slip, not a deeper shape."""
+    # Seat row dedented to indent 4 (should be 6).
+    seat_dedent = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n    - model: a\n"
+    )
+    expect_valueerror("misindented seat row (indent 4) rejected",
+                      lambda: np.parse(seat_dedent))
+
+    # Seat row over-indented to 8 (should be 6).
+    seat_over = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n        - model: a\n"
+    )
+    expect_valueerror("over-indented seat row (indent 8) rejected",
+                      lambda: np.parse(seat_over))
+
+    # Continuation key over-indented to 10 (should be 8).
+    cont_over = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n          role: architect\n"
+    )
+    expect_valueerror("misindented seat continuation (indent 10) rejected",
+                      lambda: np.parse(cont_over))
+
+    # Guard against over-strictness: the canonical column layout still parses.
+    ok = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n        role: architect\n"
+    )
+    check("canonical 6/8 indentation still parses",
+          np.parse(ok)[0]["targets"][0]["role"] == "architect")
+
+
+def test_float_weight_roundtrip() -> None:
+    """A small/scientific-notation float weight must round-trip. Before the fix
+    ``repr(1e-05) == '1e-05'`` was rejected by ``_is_float_token`` on re-parse,
+    turning a valid weight into a round-trip failure (a 400 on write)."""
+    for w in ("0.25", "1e-05"):
+        text = (
+            "native-panels:\n  p:\n    engine: native\n    strategy: weighted\n"
+            "    targets[1]:\n      - model: m\n        weight: " + w + "\n"
+        )
+        parsed = np.parse(text)
+        seat = parsed[0]["targets"][0]
+        check(f"weight {w} parses to a float", isinstance(seat["weight"], float))
+        check(f"weight {w} value is correct", seat["weight"] == float(w))
+        check(f"weight {w} passes roundtrip_ok", np.roundtrip_ok(text))
+        check(f"weight {w} serialize(parse(x)) == x byte-for-byte",
+              np.serialize(parsed) == text)
+
+
+def test_non_finite_weight_rejected() -> None:
+    """A hand-authored ``weight`` that overflows to inf (or a nan/inf token) must
+    be rejected by the STRICT parser, not just at the HTTP PUT boundary. Before
+    the fix, ``weight: 1e309`` parsed via ``float()`` to ``float('inf')`` and the
+    seat validation (which only rejected ``weight < 0``) let it through — a panel
+    with a non-finite weight flowed out of parse()/discover_panels()/GET and would
+    poison weighted aggregation. This is the symmetric counterpart to the v3.0.0
+    must-fix already applied in ``_validate_native_panels_body`` (routes.py)."""
+    overflow = (
+        "native-panels:\n  p:\n    engine: native\n    strategy: weighted\n"
+        "    targets[1]:\n      - model: m\n        weight: 1e309\n"
+    )
+    expect_valueerror("weight 1e309 (overflows to inf) rejected",
+                      lambda: np.parse(overflow))
+    # Falsifiable anchor: 1e309 really does overflow to inf, so before the fix
+    # np.parse(overflow) returned a seat with weight == float('inf'). The isfinite
+    # guard is what now turns that into the ValueError asserted above.
+    check("1e309 overflows to inf (the value the parser used to accept)",
+          float("1e309") == float("inf"))
+
+    # ``nan``/``inf`` bare tokens are NOT matched by ``_FLOAT_TOKEN_RE`` (it
+    # requires digits), so they never become a float — they stay bare strings and
+    # are rejected earlier by the "weight must be a number" guard. Still a
+    # ValueError, so both forms fail parse() as required.
+    for tok in ("nan", "inf", "-inf"):
+        text = (
+            "native-panels:\n  p:\n    engine: native\n"
+            "    targets[1]:\n      - model: m\n        weight: " + tok + "\n"
+        )
+        expect_valueerror(f"weight token {tok!r} rejected", lambda t=text: np.parse(t))
+        check(f"{tok!r} is not a float token (arrives as a string)",
+              np._is_float_token(tok) is False)
+
+
+# --------------------------------------------------------------------------
+# Finding 2: a PRESENT file missing its root table is an error
+# --------------------------------------------------------------------------
+
+def test_missing_root_is_error() -> None:
+    typo = (
+        "native-panel:\n  p:\n    engine: native\n    targets[1]:\n      - model: m\n"
+    )
+    expect_valueerror("typo'd root 'native-panel:' rejected", lambda: np.parse(typo))
+    expect_valueerror("empty string rejected (no root)", lambda: np.parse(""))
+    expect_valueerror("unrelated content rejected (no root)",
+                      lambda: np.parse("hello: world\n"))
+
+
+# --------------------------------------------------------------------------
+# Discovery: a genuinely absent file across all scopes returns empty, no raise
+# --------------------------------------------------------------------------
+
+def test_discovery_absent_file() -> None:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as proj:
+        orig_home, orig_proj = np._home, np._project_root
+        orig_cfg = os.environ.pop("RUTHERFORD_CONFIG_DIR", None)
+        try:
+            np._home = lambda: Path(home)
+            np._project_root = lambda: Path(proj)
+            panels, errors = np.discover_panels()  # no files anywhere
+            check("absent file -> empty panels", panels == {})
+            check("absent file -> no errors", errors == [])
+        finally:
+            np._home, np._project_root = orig_home, orig_proj
+            if orig_cfg is not None:
+                os.environ["RUTHERFORD_CONFIG_DIR"] = orig_cfg
+
+
+def test_discovery_present_broken_file_reports_error() -> None:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as proj:
+        orig_home, orig_proj = np._home, np._project_root
+        orig_cfg = os.environ.pop("RUTHERFORD_CONFIG_DIR", None)
+        try:
+            np._home = lambda: Path(home)
+            np._project_root = lambda: Path(proj)
+            d = Path(home) / ".rutherford"
+            d.mkdir(parents=True)
+            (d / "native-panels.toon").write_text("native-panel:\n", encoding="utf-8")
+            panels, errors = np.discover_panels()
+            check("present broken file -> no panels", panels == {})
+            check("present broken file -> reported in errors", len(errors) == 1)
+        finally:
+            np._home, np._project_root = orig_home, orig_proj
+            if orig_cfg is not None:
+                os.environ["RUTHERFORD_CONFIG_DIR"] = orig_cfg
+
+
+# --------------------------------------------------------------------------
+# Atomic writer: path guard + timestamped .bak + atomic replace
+# --------------------------------------------------------------------------
+
+def test_path_guard() -> None:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as proj:
+        orig_home, orig_proj = np._home, np._project_root
+        orig_cfg = os.environ.pop("RUTHERFORD_CONFIG_DIR", None)
+        try:
+            np._home = lambda: Path(home)
+            np._project_root = lambda: Path(proj)
+            panels = np.parse(EXAMPLE.read_text(encoding="utf-8"))
+
+            # Parent not a .rutherford scope dir -> refused.
+            outside = Path(proj) / "native-panels.toon"
+            expect_valueerror("write outside .rutherford refused",
+                              lambda: np.atomic_write(outside, panels))
+
+            # Wrong filename inside a scope dir -> refused.
+            wrong_name = Path(home) / ".rutherford" / "panels.toon"
+            expect_valueerror("write with wrong filename refused",
+                              lambda: np.atomic_write(wrong_name, panels))
+        finally:
+            np._home, np._project_root = orig_home, orig_proj
+            if orig_cfg is not None:
+                os.environ["RUTHERFORD_CONFIG_DIR"] = orig_cfg
+
+
+def test_atomic_write_and_bak() -> None:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as proj:
+        orig_home, orig_proj = np._home, np._project_root
+        orig_cfg = os.environ.pop("RUTHERFORD_CONFIG_DIR", None)
+        try:
+            np._home = lambda: Path(home)
+            np._project_root = lambda: Path(proj)
+            target = Path(home) / ".rutherford" / "native-panels.toon"
+            # Two DISTINCT panel sets so the .bak's content is falsifiable — it
+            # must hold the FIRST write's bytes, not the second's.
+            panels_a = np.parse(EXAMPLE.read_text(encoding="utf-8"))
+            panels_b = [{
+                "name": "solo",
+                "engine": "native",
+                "targets": [{"model": "only-model"}],
+            }]
+
+            # First write: creates the file, no .bak yet.
+            np.atomic_write(target, panels_a)
+            check("first write creates the file", target.is_file())
+            text_a = target.read_text(encoding="utf-8")
+            baks = list(target.parent.glob("native-panels.toon.bak-*"))
+            check("first write leaves no .bak", baks == [])
+            check("written file round-trips", np.parse(text_a) is not None)
+
+            # Second write of a DIFFERENT set: backs the previous file up to a .bak.
+            np.atomic_write(target, panels_b)
+            baks = list(target.parent.glob("native-panels.toon.bak-*"))
+            check("overwrite creates exactly one .bak", len(baks) == 1)
+            # The .bak must hold the PREVIOUS (first) content, not the new one.
+            check(".bak holds the previous write's content",
+                  baks[0].read_text(encoding="utf-8") == text_a)
+            check(".bak is NOT the new content",
+                  "solo" not in baks[0].read_text(encoding="utf-8"))
+            # The live file now holds the NEW content.
+            check("live file now holds the new content",
+                  "solo" in target.read_text(encoding="utf-8"))
+
+            # Atomicity: no leftover temp files in the directory.
+            tmps = list(target.parent.glob("native-panels.toon.*.tmp"))
+            check("no leftover .tmp files (atomic replace)", tmps == [])
+        finally:
+            np._home, np._project_root = orig_home, orig_proj
+            if orig_cfg is not None:
+                os.environ["RUTHERFORD_CONFIG_DIR"] = orig_cfg
+
+
+def main() -> int:
+    for fn in (
+        test_example_roundtrip,
+        test_edge_roundtrip,
+        test_control_char_roundtrip,
+        test_control_char_via_structured_input,
+        test_parse_errors,
+        test_parser_hardening,
+        test_indentation_columns,
+        test_float_weight_roundtrip,
+        test_non_finite_weight_rejected,
+        test_missing_root_is_error,
+        test_discovery_absent_file,
+        test_discovery_present_broken_file_reports_error,
+        test_path_guard,
+        test_atomic_write_and_bak,
+    ):
+        fn()
+    total = _passed + _failed
+    if _failed:
+        print(f"\n✗ native_panels tests: {_passed}/{total} passed, {_failed} failed")
+        return 1
+    print(f"✓ native_panels tests: {_passed}/{total} passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
