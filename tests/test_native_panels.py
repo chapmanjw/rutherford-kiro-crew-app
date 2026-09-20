@@ -343,6 +343,40 @@ def test_float_weight_roundtrip() -> None:
               np.serialize(parsed) == text)
 
 
+def test_non_finite_weight_rejected() -> None:
+    """A hand-authored ``weight`` that overflows to inf (or a nan/inf token) must
+    be rejected by the STRICT parser, not just at the HTTP PUT boundary. Before
+    the fix, ``weight: 1e309`` parsed via ``float()`` to ``float('inf')`` and the
+    seat validation (which only rejected ``weight < 0``) let it through — a panel
+    with a non-finite weight flowed out of parse()/discover_panels()/GET and would
+    poison weighted aggregation. This is the symmetric counterpart to the v3.0.0
+    must-fix already applied in ``_validate_native_panels_body`` (routes.py)."""
+    overflow = (
+        "native-panels:\n  p:\n    engine: native\n    strategy: weighted\n"
+        "    targets[1]:\n      - model: m\n        weight: 1e309\n"
+    )
+    expect_valueerror("weight 1e309 (overflows to inf) rejected",
+                      lambda: np.parse(overflow))
+    # Falsifiable anchor: 1e309 really does overflow to inf, so before the fix
+    # np.parse(overflow) returned a seat with weight == float('inf'). The isfinite
+    # guard is what now turns that into the ValueError asserted above.
+    check("1e309 overflows to inf (the value the parser used to accept)",
+          float("1e309") == float("inf"))
+
+    # ``nan``/``inf`` bare tokens are NOT matched by ``_FLOAT_TOKEN_RE`` (it
+    # requires digits), so they never become a float — they stay bare strings and
+    # are rejected earlier by the "weight must be a number" guard. Still a
+    # ValueError, so both forms fail parse() as required.
+    for tok in ("nan", "inf", "-inf"):
+        text = (
+            "native-panels:\n  p:\n    engine: native\n"
+            "    targets[1]:\n      - model: m\n        weight: " + tok + "\n"
+        )
+        expect_valueerror(f"weight token {tok!r} rejected", lambda t=text: np.parse(t))
+        check(f"{tok!r} is not a float token (arrives as a string)",
+              np._is_float_token(tok) is False)
+
+
 # --------------------------------------------------------------------------
 # Finding 2: a PRESENT file missing its root table is an error
 # --------------------------------------------------------------------------
@@ -481,6 +515,7 @@ def main() -> int:
         test_parser_hardening,
         test_indentation_columns,
         test_float_weight_roundtrip,
+        test_non_finite_weight_rejected,
         test_missing_root_is_error,
         test_discovery_absent_file,
         test_discovery_present_broken_file_reports_error,

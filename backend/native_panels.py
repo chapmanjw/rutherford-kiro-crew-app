@@ -34,6 +34,7 @@ Guarantees:
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import tempfile
@@ -486,6 +487,19 @@ def _finalize_panel(panel: dict[str, Any]) -> None:
         if weight is not None:
             if isinstance(weight, bool) or not isinstance(weight, (int, float)):
                 raise _panel_error(name, f"seat [{i}] weight must be a number")
+            # Reject non-finite weights (nan/inf). A hand-authored token like
+            # ``1e309`` overflows to ``float("inf")`` through the float-token
+            # parser, and inf/nan would poison downstream weighted aggregation.
+            # This mirrors the HTTP PUT validator (_validate_native_panels_body in
+            # routes.py) so the strict parser is as strict as the write boundary.
+            # (Bare ``nan``/``inf`` tokens are NOT matched by _FLOAT_TOKEN_RE — it
+            # requires digits — so they arrive as strings and are already caught by
+            # the "must be a number" check above; only overflowing numeric tokens
+            # reach here as a non-finite float, but the guard covers both paths.)
+            if not math.isfinite(weight):
+                raise _panel_error(
+                    name, f"seat [{i}] weight must be a finite number (not nan/inf)"
+                )
             if weight < 0:
                 raise _panel_error(name, f"seat [{i}] weight must be >= 0")
         parity = seat.get("parity")
