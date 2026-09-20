@@ -43,9 +43,9 @@ Read what the user actually wants, then map it. The mode names double as the cla
 | Define or list reusable crews | `panels` | Run the **configure-panels** skill. |
 | Stop the tools/dirs prompting | `permissions` | Run the **configure-permissions** skill. |
 | One concrete task: read, explain, analyze, or do a thing | `delegate` | One agent, one `prompt`. Pick `cli` from the roster. |
-| Several independent opinions, or a vote | `consensus` | Omit `targets` (or pass `"all"`) to fan out to the whole roster; name `targets` for a specific crew. Pick a `strategy` if you want one verdict instead of every voice. |
+| Several independent opinions, or a vote | `consensus` | Omit `targets` (or pass `"all"`) to fan out to the whole roster; name `targets` for a specific crew. Pick a `strategy` if you want one verdict instead of every voice. Prefer the native-panel skill when the engine is unspecified and native can serve it (see 'Prefer native panels by default'). |
 | Argue a tradeoff, stress-test a decision | `debate` | Needs `targets` with at least two agents. Set `rounds` (default 2). |
-| Review a diff or a set of changed files | `review` | Pass `diff` or `paths`. This is the read-only `code-review-panel` shape under the reviewer persona. |
+| Review a diff or a set of changed files | `review` | Pass `diff` or `paths`. This is the read-only `code-review-panel` shape under the reviewer persona. Prefer native (native-panel skill) when the engine is unspecified; use the MCP review panel when an ACP seat is named or the user asks for it. |
 | Design an approach before building | `plan` | One agent under the architect persona; pass `cli` and `goal`. Read-only by construction. |
 | Native panel / Kiro-hosted models only | `native-panel` skill | When the user names a native panel, asks to run it natively/in Kiro/without external CLIs, OR all requested seats are Kiro-spawnable models (not CLI ids). Route to the native-panel skill. No @rutherford:rutherford call. |
 
@@ -54,6 +54,8 @@ For a long-running Rutherford call, **wrap it in a `spawn_run` subagent** rather
 When the intent is genuinely mixed, prefer the cheapest mode that answers the real question, and say why you chose it.
 
 **No mixed mode on a panel.** Never split one panel across engines. If any requested seat is a Rutherford ACP CLI id (`claude_code`, `codex`, `cursor`, `kiro`, etc.) the WHOLE panel runs MCP (`consensus` / `debate` / `review`). If all seats are Kiro-spawnable model names (not CLI ids), the WHOLE panel runs native via the `native-panel` skill. When it is ambiguous whether a seat names a model or a CLI, ask the user rather than guessing an engine.
+
+**Prefer native panels by default.** When a request calls for a panel / consensus / review and the user has NOT pinned the engine — they did not name a specific ACP CLI seat (`claude_code`, `codex`, `cursor`, ...) and did not explicitly ask for an ACP / cross-tool / external take — PREFER the native engine (the `native-panel` skill) over an MCP panel whenever native can serve the request: that is, whenever a saved native panel exists (e.g. the user's `default` native panel) or the models needed are Kiro-spawnable. Native is the cheaper default (in-process subagents, no external CLI launch). This preference NEVER overrides the no-mixed-mode rule or an explicit request: if any requested seat is an ACP CLI id, or the user explicitly asks for ACP / a specific external tool / a cross-vendor-CLI take, that request wins and the whole panel runs MCP. When the user names no engine and no native panel is defined, fall back to MCP as before. State which engine you chose in one short line when it isn't obvious, so the user can redirect.
 
 ## Defaults and honesty about writes
 
