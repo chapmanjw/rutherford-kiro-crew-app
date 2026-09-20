@@ -41,7 +41,7 @@
     }
   },
   "ui": {
-    "entry": "dist/index.mjs",
+    "entry": "dist/index.mjs?v=3.0.0",
     "pages": [
       {
         "route": "/apps/rutherford",

@@ -273,6 +273,75 @@ def test_parser_hardening() -> None:
     expect_valueerror("non-integer targets count rejected",
                       lambda: np.parse(bad_count))
 
+    # A duplicate seat key (``- model: a`` then ``model: b``) silently kept ``b``
+    # before the fix — a STRICT parser must reject it, like the panel-level guard.
+    dup_seat_key = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n        model: b\n"
+    )
+    expect_valueerror("duplicate seat key rejected", lambda: np.parse(dup_seat_key))
+
+    # Garbage after the ``targets[N]`` bracket must not parse as a valid header.
+    targets_junk = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]junk:\n      - model: a\n"
+    )
+    expect_valueerror("targets[1]junk header rejected", lambda: np.parse(targets_junk))
+
+
+def test_indentation_columns() -> None:
+    """Seat rows must sit at column 6 and continuation keys at column 8; a
+    dedented or over-indented line is a structural slip, not a deeper shape."""
+    # Seat row dedented to indent 4 (should be 6).
+    seat_dedent = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n    - model: a\n"
+    )
+    expect_valueerror("misindented seat row (indent 4) rejected",
+                      lambda: np.parse(seat_dedent))
+
+    # Seat row over-indented to 8 (should be 6).
+    seat_over = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n        - model: a\n"
+    )
+    expect_valueerror("over-indented seat row (indent 8) rejected",
+                      lambda: np.parse(seat_over))
+
+    # Continuation key over-indented to 10 (should be 8).
+    cont_over = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n          role: architect\n"
+    )
+    expect_valueerror("misindented seat continuation (indent 10) rejected",
+                      lambda: np.parse(cont_over))
+
+    # Guard against over-strictness: the canonical column layout still parses.
+    ok = (
+        "native-panels:\n  p:\n    engine: native\n"
+        "    targets[1]:\n      - model: a\n        role: architect\n"
+    )
+    check("canonical 6/8 indentation still parses",
+          np.parse(ok)[0]["targets"][0]["role"] == "architect")
+
+
+def test_float_weight_roundtrip() -> None:
+    """A small/scientific-notation float weight must round-trip. Before the fix
+    ``repr(1e-05) == '1e-05'`` was rejected by ``_is_float_token`` on re-parse,
+    turning a valid weight into a round-trip failure (a 400 on write)."""
+    for w in ("0.25", "1e-05"):
+        text = (
+            "native-panels:\n  p:\n    engine: native\n    strategy: weighted\n"
+            "    targets[1]:\n      - model: m\n        weight: " + w + "\n"
+        )
+        parsed = np.parse(text)
+        seat = parsed[0]["targets"][0]
+        check(f"weight {w} parses to a float", isinstance(seat["weight"], float))
+        check(f"weight {w} value is correct", seat["weight"] == float(w))
+        check(f"weight {w} passes roundtrip_ok", np.roundtrip_ok(text))
+        check(f"weight {w} serialize(parse(x)) == x byte-for-byte",
+              np.serialize(parsed) == text)
+
 
 # --------------------------------------------------------------------------
 # Finding 2: a PRESENT file missing its root table is an error
@@ -363,20 +432,35 @@ def test_atomic_write_and_bak() -> None:
             np._home = lambda: Path(home)
             np._project_root = lambda: Path(proj)
             target = Path(home) / ".rutherford" / "native-panels.toon"
-            panels = np.parse(EXAMPLE.read_text(encoding="utf-8"))
+            # Two DISTINCT panel sets so the .bak's content is falsifiable — it
+            # must hold the FIRST write's bytes, not the second's.
+            panels_a = np.parse(EXAMPLE.read_text(encoding="utf-8"))
+            panels_b = [{
+                "name": "solo",
+                "engine": "native",
+                "targets": [{"model": "only-model"}],
+            }]
 
             # First write: creates the file, no .bak yet.
-            np.atomic_write(target, panels)
+            np.atomic_write(target, panels_a)
             check("first write creates the file", target.is_file())
+            text_a = target.read_text(encoding="utf-8")
             baks = list(target.parent.glob("native-panels.toon.bak-*"))
             check("first write leaves no .bak", baks == [])
-            check("written file round-trips",
-                  np.parse(target.read_text(encoding="utf-8")) is not None)
+            check("written file round-trips", np.parse(text_a) is not None)
 
-            # Second write: backs up the existing file to a timestamped .bak.
-            np.atomic_write(target, panels)
+            # Second write of a DIFFERENT set: backs the previous file up to a .bak.
+            np.atomic_write(target, panels_b)
             baks = list(target.parent.glob("native-panels.toon.bak-*"))
             check("overwrite creates exactly one .bak", len(baks) == 1)
+            # The .bak must hold the PREVIOUS (first) content, not the new one.
+            check(".bak holds the previous write's content",
+                  baks[0].read_text(encoding="utf-8") == text_a)
+            check(".bak is NOT the new content",
+                  "solo" not in baks[0].read_text(encoding="utf-8"))
+            # The live file now holds the NEW content.
+            check("live file now holds the new content",
+                  "solo" in target.read_text(encoding="utf-8"))
 
             # Atomicity: no leftover temp files in the directory.
             tmps = list(target.parent.glob("native-panels.toon.*.tmp"))
@@ -395,6 +479,8 @@ def main() -> int:
         test_control_char_via_structured_input,
         test_parse_errors,
         test_parser_hardening,
+        test_indentation_columns,
+        test_float_weight_roundtrip,
         test_missing_root_is_error,
         test_discovery_absent_file,
         test_discovery_present_broken_file_reports_error,

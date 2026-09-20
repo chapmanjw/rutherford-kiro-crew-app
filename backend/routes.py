@@ -37,6 +37,7 @@ resolved scope's panels.toon path.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 import tempfile
@@ -57,27 +58,42 @@ from kiro_crew.apps.route_registry import AppRoute
 # module (``backend.routes``, the gateway's ``backend.routes:register_routes``
 # entry) or as a bare module on sys.path (the test/validator harness that adds
 # ``backend/`` to the path), so the native-panels routes work under both.
-try:  # pragma: no cover - exercised implicitly by all three load styles
-    from backend import native_panels  # normal package import (validator/harness)
-except ImportError:
-    try:
-        import native_panels  # type: ignore  # backend/ on sys.path (some harnesses)
-    except ImportError:
-        # The gateway's route_registry executes routes.py BY FILE PATH with no
-        # ``backend`` package context and backend/ NOT on sys.path, so neither
-        # import above resolves. Load the sibling module explicitly, relative to
-        # this file's own __file__, so it works no matter how routes.py is loaded.
-        import importlib.util as _ilu
-        from pathlib import Path as _P
-
-        _np_path = _P(__file__).resolve().parent / "native_panels.py"
-        _spec = _ilu.spec_from_file_location("rutherford_native_panels", _np_path)
-        if _spec is None or _spec.loader is None:  # pragma: no cover - defensive
-            raise ImportError(f"cannot load native_panels from {_np_path}")
-        native_panels = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(native_panels)
-
 _LOG = logging.getLogger("rutherford.routes")
+
+# ``native_panels`` is loaded here so the whole load chain is wrapped: if the
+# module is MISSING (FileNotFoundError) or has a SYNTAX defect (SyntaxError), the
+# failure must NOT abort routes.py at module scope — that would stop
+# register_routes ever running and 404 EVERY route (config/panels/roles/meta),
+# re-creating the blanket-404 this release fixed. Instead we degrade: log the
+# failure, leave ``native_panels = None``, and let the two native handlers return
+# a clean 503 while every other route still registers.
+native_panels: Any = None
+try:  # pragma: no cover - exercised implicitly by all three load styles
+    try:
+        from backend import native_panels  # normal package import (validator/harness)
+    except ImportError:
+        try:
+            import native_panels  # type: ignore  # backend/ on sys.path (some harnesses)
+        except ImportError:
+            # The gateway's route_registry executes routes.py BY FILE PATH with no
+            # ``backend`` package context and backend/ NOT on sys.path, so neither
+            # import above resolves. Load the sibling module explicitly, relative to
+            # this file's own __file__, so it works no matter how routes.py is loaded.
+            import importlib.util as _ilu
+            from pathlib import Path as _P
+
+            _np_path = _P(__file__).resolve().parent / "native_panels.py"
+            _spec = _ilu.spec_from_file_location("rutherford_native_panels", _np_path)
+            if _spec is None or _spec.loader is None:  # pragma: no cover - defensive
+                raise ImportError(f"cannot load native_panels from {_np_path}")
+            native_panels = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(native_panels)
+except Exception:  # noqa: BLE001 — ANY load failure must degrade, not abort import
+    _LOG.exception(
+        "native_panels failed to load; native-panels routes will return 503 while "
+        "the rest of the backend routes register normally"
+    )
+    native_panels = None
 
 
 def _server_error(exc: BaseException, where: str) -> web.Response:
@@ -649,11 +665,8 @@ async def _handle_config(request: web.Request, ctx: AppContext) -> web.Response:
         payload["acp"] = _acp_sources()
         payload["env_overrides"] = _env_overrides()
         return web.json_response(payload)
-    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
-        tb = traceback.format_exc()
-        return web.json_response(
-            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
-        )
+    except Exception as exc:  # noqa: BLE001 — no traceback/abs-path leak to client
+        return _server_error(exc, "rutherford-config route")
 
 
 async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Response:
@@ -727,11 +740,8 @@ async def _handle_config_write(request: web.Request, ctx: AppContext) -> web.Res
         payload["acp"] = _acp_sources()
         payload["env_overrides"] = _env_overrides()
         return web.json_response(payload)
-    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
-        tb = traceback.format_exc()
-        return web.json_response(
-            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
-        )
+    except Exception as exc:  # noqa: BLE001 — no traceback/abs-path leak to client
+        return _server_error(exc, "rutherford-config route")
 
 
 def _reachability_note(
@@ -1312,11 +1322,8 @@ async def _handle_panels_write(request: web.Request, ctx: AppContext) -> web.Res
         except (OSError, ValueError) as exc:
             payload["error"] = f"{type(exc).__name__}: {exc}"
         return web.json_response(payload)
-    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
-        tb = traceback.format_exc()
-        return web.json_response(
-            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
-        )
+    except Exception as exc:  # noqa: BLE001 — no traceback/abs-path leak to client
+        return _server_error(exc, "PUT /rutherford-panels")
 
 
 # --------------------------------------------------------------------------
@@ -1426,10 +1433,18 @@ def _validate_native_panels_body(body: Any) -> tuple[list[dict[str, Any]] | None
             if w is not None and not (isinstance(w, str) and w.strip() == ""):
                 if isinstance(w, bool):
                     return None, f"native panel {name!r} seat [{j}] weight must be a number"
+                # float("nan")/float("inf") SUCCEED and float("1e309") overflows —
+                # both would then blow up the ``int(wv)`` normalization below with a
+                # ValueError/OverflowError that bubbled to the outer handler as a 500
+                # for plain user input. Guard the parse (incl. OverflowError) and
+                # reject any non-finite value, so ``int(wv)`` only ever runs on a
+                # finite number and every bad weight is a 400, never a 500.
                 try:
                     wv = float(w)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     return None, f"native panel {name!r} seat [{j}] weight must be a number"
+                if not math.isfinite(wv):
+                    return None, f"native panel {name!r} seat [{j}] weight must be a finite number"
                 if wv < 0:
                     return None, f"native panel {name!r} seat [{j}] weight must be >= 0"
                 seat["weight"] = int(wv) if wv == int(wv) else wv
@@ -1471,38 +1486,45 @@ async def _handle_native_panels(request: web.Request, ctx: AppContext) -> web.Re
     surfaced per-source, never raised — a malformed native-panels.toon reports its
     reason instead of blanking the tab.
     """
-    scopes = native_panels.scope_dirs()
-    # Precedence resolution: which scope actually wins for each panel name.
-    resolved, _errs = native_panels.discover_panels()
-    winning = {name: rec.get("_scope") for name, rec in resolved.items()}
+    # Native panels degraded to unavailable at import time (module missing or a
+    # syntax defect) — report it cleanly instead of raising AttributeError on None.
+    if native_panels is None:
+        return web.json_response({"error": "native panels unavailable"}, status=503)
+    try:
+        scopes = native_panels.scope_dirs()
+        # Precedence resolution: which scope actually wins for each panel name.
+        resolved, _errs = native_panels.discover_panels()
+        winning = {name: rec.get("_scope") for name, rec in resolved.items()}
 
-    result: list[dict[str, Any]] = []
-    for entry_dir in scopes:
-        scope = entry_dir["scope"]
-        path = entry_dir["path"]
-        meta = _meta(path, scope)
-        entry: dict[str, Any] = {**meta, "panels": []}
-        if path.is_file():
-            try:
-                parsed = native_panels.parse(path.read_text(encoding="utf-8"))
-                views: list[dict[str, Any]] = []
-                for p in parsed:
-                    view = _native_panel_view(p)
-                    win = winning.get(p["name"])
-                    view["resolved"] = win == scope
-                    view["resolved_scope"] = win
-                    views.append(view)
-                entry["panels"] = views
-            except (OSError, ValueError) as exc:
-                entry["error"] = f"{type(exc).__name__}: {exc}"
-        result.append(entry)
-    return web.json_response(
-        {
-            "platform": _platform_label(),
-            "scopes": [s["scope"] for s in scopes],
-            "sources": result,
-        }
-    )
+        result: list[dict[str, Any]] = []
+        for entry_dir in scopes:
+            scope = entry_dir["scope"]
+            path = entry_dir["path"]
+            meta = _meta(path, scope)
+            entry: dict[str, Any] = {**meta, "panels": []}
+            if path.is_file():
+                try:
+                    parsed = native_panels.parse(path.read_text(encoding="utf-8"))
+                    views: list[dict[str, Any]] = []
+                    for p in parsed:
+                        view = _native_panel_view(p)
+                        win = winning.get(p["name"])
+                        view["resolved"] = win == scope
+                        view["resolved_scope"] = win
+                        views.append(view)
+                    entry["panels"] = views
+                except (OSError, ValueError) as exc:
+                    entry["error"] = f"{type(exc).__name__}: {exc}"
+            result.append(entry)
+        return web.json_response(
+            {
+                "platform": _platform_label(),
+                "scopes": [s["scope"] for s in scopes],
+                "sources": result,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 — an unexpected OSError etc. must not leak
+        return _server_error(exc, "GET /rutherford-native-panels")
 
 
 async def _handle_native_panels_write(request: web.Request, ctx: AppContext) -> web.Response:
@@ -1517,6 +1539,10 @@ async def _handle_native_panels_write(request: web.Request, ctx: AppContext) -> 
     re-read payload with ``written: true`` (mirrors the GET shape) so the UI can
     confirm persistence via written===true or a verify GET.
     """
+    # Degraded-load guard: if native_panels never loaded there is nothing to
+    # serialize/write — return 503 rather than AttributeError on None.
+    if native_panels is None:
+        return web.json_response({"error": "native panels unavailable"}, status=503)
     scope_map = _native_scope_map()
     scope = (request.query.get("scope") or "global").lower()
     if scope not in scope_map:
@@ -1888,11 +1914,8 @@ async def _handle_meta(request: web.Request, ctx: AppContext) -> web.Response:
             ),
         }
         return web.json_response(payload)
-    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
-        tb = traceback.format_exc()
-        return web.json_response(
-            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
-        )
+    except Exception as exc:  # noqa: BLE001 — no traceback/abs-path leak to client
+        return _server_error(exc, "GET /rutherford-meta")
 
 
 async def _handle_roles(request: web.Request, ctx: AppContext) -> web.Response:
@@ -2080,11 +2103,8 @@ async def _handle_roles_write(request: web.Request, ctx: AppContext) -> web.Resp
                 "sources": _list_role_sources(),
             }
         )
-    except Exception as exc:  # noqa: BLE001 — surface swallowed errors
-        tb = traceback.format_exc()
-        return web.json_response(
-            {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}, status=500
-        )
+    except Exception as exc:  # noqa: BLE001 — no traceback/abs-path leak to client
+        return _server_error(exc, "PUT /rutherford-roles")
 
 
 # --------------------------------------------------------------------------

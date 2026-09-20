@@ -109,6 +109,7 @@ Kiro Crew app format.
   install from a local checkout (`git clone` then `kirocrew app install <path>`) — both behind a trust
   grant.
 
+[3.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v3.0.0
 [2.2.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.2.0
 [2.1.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.1.0
 [2.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.0.0

@@ -259,6 +259,14 @@ def test_invalid_bodies_rejected_and_no_write():
                 ],
                 "negative weight": [_panel(model="m", weight=-1)],
                 "non-bool parity": [_panel(model="m", parity="yes")],
+                # Malformed numeric weights: float("nan")/float("inf") SUCCEED and a
+                # huge value overflows — before the fix the later int(wv) raised a
+                # ValueError/OverflowError that surfaced as a 500 for user input.
+                # Each must now be a clean 400 with NO file written.
+                "weight nan": [_panel(model="m", weight="nan")],
+                "weight inf": [_panel(model="m", weight="inf")],
+                "weight 1e309 (inf)": [_panel(model="m", weight=1e309)],
+                "weight overflow int": [_panel(model="m", weight=10**400)],
             }
             for label, body in cases.items():
                 resp = put_panels("global", {"panels": body})

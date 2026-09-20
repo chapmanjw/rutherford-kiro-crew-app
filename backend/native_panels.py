@@ -35,6 +35,7 @@ Guarantees:
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -210,18 +211,23 @@ def _parse_scalar(raw: str) -> Any:
     return raw
 
 
-def _is_float_token(raw: str) -> bool:
-    """True only for a complete numeric float token like ``1.5`` / ``-0.25``.
+# A complete numeric float token: either a dotted form with digits on BOTH sides
+# of a single dot (``1.5`` / ``-0.25``, optionally with an exponent ``1.5e3``) OR
+# a bare mantissa with an exponent (``1e-05`` / ``2E10``). The exponent forms
+# matter because ``_emit_scalar`` serializes a Python float via ``repr()``, and
+# ``repr(1e-05) == "1e-05"`` — without accepting the exponent the parser would
+# reject its OWN output and a valid small weight would fail the round-trip.
+# Requiring digits around the dot keeps a model name that merely contains a dot
+# (``claude-sonnet-4.5``) from ever being mistaken for a number, and the
+# fullmatch keeps letters/hyphens out.
+_FLOAT_TOKEN_RE = re.compile(
+    r"-?(?:\d+\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)"
+)
 
-    Requires digits on BOTH sides of a single dot so a model name that merely
-    contains a dot (``claude-sonnet-4.5`` has a leading ``claude-``) is never
-    mistaken for a number.
-    """
-    body = raw[1:] if raw.startswith("-") else raw
-    if body.count(".") != 1:
-        return False
-    left, right = body.split(".")
-    return left.isdigit() and right.isdigit()
+
+def _is_float_token(raw: str) -> bool:
+    """True only for a complete numeric float token (dotted or exponential)."""
+    return _FLOAT_TOKEN_RE.fullmatch(raw) is not None
 
 
 # --------------------------------------------------------------------------
@@ -304,10 +310,17 @@ def parse(text: str) -> list[dict[str, Any]]:
 
         name = current["name"]
 
-        # A seat row: "- model: ..." at indent 6.
+        # A seat row: "- model: ..." at indent EXACTLY 6. A dedented or
+        # over-indented seat row is a structural slip that could silently move a
+        # seat out of (or misplace it within) the list — reject it rather than
+        # accept a "- " at any indent.
         if stripped.startswith("- ") or stripped == "-":
             if not in_targets:
                 raise _panel_error(name, f"seat item outside a targets list: {stripped!r}")
+            if indent != 6:
+                raise _panel_error(
+                    name, f"seat row must be indented 6 spaces (got {indent}): {stripped!r}"
+                )
             current_seat = {}
             current["targets"].append(current_seat)
             rest = stripped[2:] if stripped.startswith("- ") else ""
@@ -318,8 +331,10 @@ def parse(text: str) -> list[dict[str, Any]]:
                 _set_seat_key(name, current_seat, k.strip(), _parse_scalar(v))
             continue
 
-        # A seat continuation key at indent >= 8.
-        if current_seat is not None and in_targets and indent >= 8 and ":" in stripped and not stripped.endswith(":"):
+        # A seat continuation key at indent EXACTLY 8 (one level under the "- "
+        # row). A deeper/shallower continuation is a mis-indentation, not a
+        # deeper structure — the format is flat — so pin the column.
+        if current_seat is not None and in_targets and indent == 8 and ":" in stripped and not stripped.endswith(":"):
             k, v = stripped.split(":", 1)
             _set_seat_key(name, current_seat, k.strip(), _parse_scalar(v))
             continue
@@ -395,6 +410,10 @@ def _parse_targets_count(panel_name: str, base: str) -> int | None:
     rb = base.find("]", lb)
     if rb == -1:
         raise _panel_error(panel_name, f"malformed targets header {base!r}")
+    # Nothing may follow the closing bracket. ``targets[1]junk`` must NOT parse as
+    # a valid ``targets[1]`` header with the ``junk`` silently ignored.
+    if base[rb + 1 :].strip():
+        raise _panel_error(panel_name, f"unexpected text after targets header {base!r}")
     inner = base[lb + 1 : rb].strip()
     if not inner.isdigit():
         raise _panel_error(panel_name, f"targets count must be an integer (got {inner!r})")
@@ -407,6 +426,11 @@ def _set_seat_key(panel_name: str, seat: dict[str, Any], key: str, value: Any) -
             panel_name,
             f"unknown seat key {key!r} — valid keys are {', '.join(_SEAT_KEYS)}",
         )
+    # A repeated seat key would silently overwrite the earlier value (``- model: a``
+    # then ``model: b`` keeps ``b``), contradicting the STRICT contract and the
+    # panel-level duplicate-key guard. Reject it.
+    if key in seat:
+        raise _panel_error(panel_name, f"duplicate seat key {key!r}")
     seat[key] = value
 
 
@@ -569,6 +593,13 @@ def atomic_write(path: Path, panels: list[dict[str, Any]]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
+            # Force the bytes to disk before the atomic rename so a crash between
+            # the write and os.replace cannot leave a torn/empty file in place.
+            # (Directory fsync — which would also durably record the rename — is
+            # POSIX-only and best-effort; os.fsync on the fd is portable, incl.
+            # Windows, so that is all we do here.)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     except BaseException:
         try:
