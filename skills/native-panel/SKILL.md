@@ -77,10 +77,17 @@ first. Panels merge by name; the highest-precedence scope wins for a same-named 
 2. project `<cwd>/.rutherford/native-panels.toon` — overrides home for a same-named panel.
 3. `$RUTHERFORD_CONFIG_DIR/native-panels.toon` — an explicit directory; overrides both (highest).
 
+RESOLVE ONLY from these three `.rutherford/` config scopes. NEVER resolve a panel from a repo's
+`examples/native-panels.toon` — that file is a ship-with-the-app STARTER TEMPLATE (its panels like
+`fast-review`/`design-roundtable`/`ship-vote` are illustrative samples, NOT the user's panels). Ignore any
+`native-panels.toon` found under an app/repo tree such as `examples/`, `docs/`, or the app install dir; the
+user's real panels live only in `~/.rutherford/`, `<cwd>/.rutherford/`, or `$RUTHERFORD_CONFIG_DIR`. If you
+are unsure which file is the config, prefer `~/.rutherford/native-panels.toon` (the global per-user store).
+
 Parse it (the strict TOON parser in `backend/native_panels.py` is the reference implementation). If the
 named panel does not exist, STOP with a clear error that lists what IS available:
 
-> panel 'X' not found in native-panels.toon; available: [fast-review, design-roundtable, ship-vote]
+> panel 'X' not found in native-panels.toon; available: [<names from the resolved config scopes>]
 
 If the user described seats inline instead of naming a saved panel, build an in-memory panel record from
 their request (same shape) and continue.
