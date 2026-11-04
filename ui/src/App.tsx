@@ -49,6 +49,9 @@ type MetaResp = {
   native_roles?: string[]
   native_models?: string[]
   native_models_source?: string
+  // Harnesses a native seat may be pinned to (v3.1.0): static suggestions, not a live probe.
+  native_backends?: string[]
+  native_backends_source?: string
   error?: string
 }
 
@@ -121,6 +124,8 @@ type NativeSeat = {
   parity?: boolean
   stance?: string
   agent?: string
+  // Kiro Crew harness to spawn the seat on (v3.1.0). Omitted = the harness Kiro Crew uses.
+  backend?: string
 }
 
 type NativePanelRec = {
@@ -2301,6 +2306,7 @@ function nativePanelsToBody(drafts: NativePanelRec[]): NativePanelRec[] {
       if (s.label && String(s.label).trim()) out.label = String(s.label).trim()
       if (s.stance && String(s.stance).trim()) out.stance = String(s.stance).trim()
       if (s.agent && String(s.agent).trim()) out.agent = String(s.agent).trim()
+      if (s.backend && String(s.backend).trim()) out.backend = String(s.backend).trim()
       if (s.weight !== undefined && s.weight !== null && String(s.weight).trim() !== '')
         out.weight = Number(s.weight)
       if (s.parity === true) out.parity = true
@@ -2334,6 +2340,7 @@ function canonNativeSeat(s: NativeSeat): Record<string, string | boolean> {
     label: String(s.label ?? '').trim(),
     stance: String(s.stance ?? '').trim(),
     agent: String(s.agent ?? '').trim(),
+    backend: String(s.backend ?? '').trim(),
     weight: wStr,
     parity: s.parity === true,
   }
@@ -2375,7 +2382,13 @@ function NativeSeatEditor({
   const set = (k: keyof NativeSeat, v: string) => onChange({ ...seat, [k]: v })
   // Models are never a live roster — always a free-text combobox seeded with the
   // documented list (the native-panel skill validates the real model at run time).
-  const models = Array.isArray(meta?.native_models) ? meta!.native_models : []
+  // The suggestions are Kiro ids, so offer them only for a seat on the harness
+  // Kiro Crew uses (backend omitted or `kiro`). On another backend a Kiro id would
+  // silently run that harness's default model, so the field is plain free text.
+  const backend = String(seat.backend ?? '').trim()
+  const kiroSeat = backend === '' || backend === 'kiro'
+  const models = kiroSeat && Array.isArray(meta?.native_models) ? meta!.native_models : []
+  const backends = Array.isArray(meta?.native_backends) ? meta!.native_backends : []
   const nativeRoles = Array.isArray(meta?.native_roles) ? meta!.native_roles : []
   return (
     <div className="p-2.5 rounded bg-[var(--surface-3,#232323)] border border-[var(--border,#2a2a2a)]">
@@ -2390,9 +2403,25 @@ function NativeSeatEditor({
             options={models}
             freeText
             listId={`nseat-model-${index}`}
-            placeholder="Kiro model (required)"
+            placeholder={kiroSeat ? 'Kiro model (required)' : `${backend} model id (required)`}
             onChange={(v) => set('model', v)}
           />
+        </label>
+        {/* backend — the Kiro Crew harness to spawn on. Free text seeded with the
+            gateway's harness names; empty means the harness Kiro Crew itself uses. */}
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted opacity-70">backend</span>
+          <ComboSelect
+            value={seat.backend != null ? String(seat.backend) : ''}
+            options={backends}
+            freeText
+            listId={`nseat-backend-${index}`}
+            placeholder="default (Kiro Crew's own harness)"
+            onChange={(v) => set('backend', v)}
+          />
+          <span className="text-[10px] text-muted opacity-70" title={String(meta?.native_backends_source || '')}>
+            model ids come from this backend's own list
+          </span>
         </label>
         {/* role — limited to the five ported native roles (+ none). Keep an
             unknown loaded value selectable so it round-trips. */}
@@ -2630,6 +2659,7 @@ function NativePanelsView({
   const source = sources.find((s) => s.scope === activeScope) || null
   const sourceKey = JSON.stringify(source?.panels ?? null) + '|' + activeScope
   const modelsNote = String(meta?.native_models_source || '')
+  const backendsNote = String(meta?.native_backends_source || '')
   // Panels at THIS scope that a higher-precedence scope shadows (won't run here).
   const shadowed = (source?.panels || []).filter((p) => p.resolved === false)
 
@@ -2728,8 +2758,13 @@ function NativePanelsView({
           </span>
           {modelsNote && (
             <span className="text-xs text-muted">
-              Model list: {modelsNote}. Type any Kiro-spawnable model; it is validated at run time.
+              Model list: {modelsNote}. The skill validates models only when the seat's backend is
+              omitted or <code>kiro</code>; a model requested on another backend stays unvalidated, and
+              an unknown id may run that backend's default model.
             </span>
+          )}
+          {backendsNote && (
+            <span className="text-xs text-muted">Backend list: {backendsNote}.</span>
           )}
         </div>
       </div>

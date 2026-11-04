@@ -429,9 +429,17 @@ _NATIVE_ROLE_IDS = (
 # so we cannot enumerate the machine's real models. These seed a free-text datalist
 # in the native seat editor; the ACTUAL model is entered as free text and validated
 # by the native-panel skill against ``kiro-cli chat --list-models`` at run time.
+# These are Kiro ids: a seat pinned to another ``backend`` takes that harness's own
+# model ids, so the editor offers no model suggestions for it.
 _NATIVE_MODELS = (
     "claude-sonnet-5", "claude-sonnet-4.5", "gpt-5.6-luna", "gpt-5.6", "deepseek-3.2",
 )
+
+# Kiro Crew harnesses a native seat's ``backend:`` may name (v3.1.0), as the
+# gateway's ``spawn_run`` reports them today. Like the model list above this is a
+# static suggestion list, NOT a live probe or an allowlist: the field is free text
+# and the gateway refuses an unavailable backend when it spawns the seat.
+_NATIVE_BACKENDS = ("claude", "codex", "kas", "kiro")
 
 # Safety postures (reference/config.md).
 _SAFETY_MODES = ("read_only", "propose", "write", "yolo")
@@ -1381,7 +1389,7 @@ def _validate_native_panels_body(body: Any) -> tuple[list[dict[str, Any]] | None
     a non-empty name and a non-empty seat list (read from ``seats`` — the shape the
     GET returns — falling back to ``targets`` when that is itself a list). Each seat
     needs a non-empty ``model``; the other native seat keys (role/label/stance/
-    agent/weight/parity) are optional and only carried through when set. ``engine``
+    agent/backend/weight/parity) are optional and only carried through when set. ``engine``
     defaults to ``native``. Returns ``(panels, error)`` where each clean panel
     carries its seat list under ``targets`` (native_panels' seat-list key). The
     STRICT native parser (engine must be native, weight ≥ 0, parity a bool, etc.)
@@ -1427,6 +1435,17 @@ def _validate_native_panels_body(body: Any) -> tuple[list[dict[str, Any]] | None
                 sv = str(v).strip()
                 if sv != "":
                     seat[k] = sv
+            # backend — the Kiro Crew harness to spawn on. Unlike the coercing loop
+            # above it must already BE a string: str() would turn a JSON true or {}
+            # into "True" / "{}", which the strict parser accepts as a string and
+            # which would only fail later as an unknown backend at spawn time.
+            be = s.get("backend")
+            if be is not None:
+                if not isinstance(be, str):
+                    return None, f"native panel {name!r} seat [{j}] backend must be a string"
+                be = be.strip()
+                if be != "":
+                    seat["backend"] = be
             # weight — a number ≥ 0. Keep an integral value as an int so the TOON
             # emits ``1`` not ``1.0`` (matches the canonical example formatting).
             w = s.get("weight")
@@ -1910,7 +1929,16 @@ async def _handle_meta(request: web.Request, ctx: AppContext) -> web.Response:
             "native_models": list(_NATIVE_MODELS),
             "native_models_source": (
                 "static documented list (kiro-cli chat --list-models not reachable "
-                "from backend; free-text entry, validated by the native-panel skill at run time)"
+                "from backend; free-text entry, validated by the native-panel skill at run time); "
+                "Kiro ids only, so seats on another backend take free text"
+            ),
+            # Harnesses a seat may be pinned to (v3.1.0). Static suggestions, not a
+            # live availability probe: the gateway refuses an unavailable backend
+            # when it spawns the seat.
+            "native_backends": list(_NATIVE_BACKENDS),
+            "native_backends_source": (
+                "static suggestions (not a live probe); the gateway checks that a "
+                "backend is available only when it spawns the seat"
             ),
         }
         return web.json_response(payload)

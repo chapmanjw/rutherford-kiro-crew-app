@@ -41,3 +41,15 @@ native-panels:
       - model: deepseek-3.2
         role: principal-reviewer
         label: deepseek
+  cross-harness-review:
+    description: One reviewer on Kiro Crew's own harness and one on codex, both must agree.
+    engine: native
+    strategy: unanimous
+    targets[2]:
+      - model: claude-sonnet-5
+        role: principal-reviewer
+        label: claude
+      - model: openai.gpt-6.1-sol
+        role: principal-reviewer
+        label: codex
+        backend: codex

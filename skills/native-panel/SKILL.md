@@ -29,7 +29,8 @@ USS Cerritos . Engineering
 ```
 
 A native panel is a Rutherford panel run ENTIRELY inside Kiro Crew: every seat is a `spawn_run` subagent
-at one model, the votes are reduced by a strategy, and no external ACP agent is launched — zero
+at one model (on the harness Kiro Crew itself uses, or on the harness the seat's `backend` names), the votes
+are reduced by a strategy, and no external ACP agent is launched — zero
 `@rutherford:rutherford` calls. It is the all-native counterpart to the MCP `consensus` / `debate` /
 `review` path. Use it when the user names a panel from `native-panels.toon`, asks to run a panel natively
 or in Kiro or without external CLIs, or names only Kiro-spawnable models.
@@ -68,6 +69,13 @@ skill) when ANY requested seat is a Rutherford ACP CLI id — `claude_code`, `co
 seat forces the whole panel onto MCP. When it is genuinely ambiguous whether the user means a model or a
 CLI, ASK — do not guess an engine.
 
+A seat's `backend` key (e.g. `backend: codex`, `backend: kiro`) names the Kiro Crew harness that runs the
+`spawn_run`. It is NOT a Rutherford ACP CLI id, even though `codex` and `kiro` are spelled the same as two
+ACP ids. A saved native panel whose seats set `backend` is still entirely native. This applies only to a
+`backend` value read from `native-panels.toon`, or to a user who explicitly says "backend" or "harness". A
+bare `codex` / `kiro` / `claude_code` named as a seat in the user's request still means the ACP CLI. When
+unsure, ask.
+
 ## Step 1 — Resolve the panel
 
 Read `native-panels.toon` across the same three scopes as `panels.toon`, listed lowest precedence
@@ -104,12 +112,18 @@ Before spawning anything, validate the resolved panel. STOP and report on the fi
 - Every seat `role` (when set) is one of the ported roles in
   `~/.kiro/crew/apps/rutherford/reference/roles-native.md` (`principal-reviewer`, `architect`, `debugger`,
   `security-reviewer`, `explainer`) → error listing the valid roles.
-- Validate the models: get the available model list once by spawning a worker to run
-  `kiro-cli chat --list-models --format json`, then check each seat's `model` is in that list. On a miss:
+- Validate the models of every seat whose `backend` is omitted or `kiro`: get the available model list
+  once by spawning a worker to run `kiro-cli chat --list-models --format json`, then check each such seat's
+  `model` is in that list. On a miss:
 
   > model 'X' is not available; use engine: mcp for external ACP agents
 
   and STOP — again, no MCP fallback.
+- A seat pinned to any other `backend` takes that harness's own model ids (for `codex`, the base id such as
+  `openai.gpt-6.1-sol`; effort goes in `reasoning_effort`, never as a `[low]` suffix on the id). The Kiro
+  list cannot validate it, so mark the seat's model **unvalidated**, do not STOP, and say in the report that
+  an unknown model id on a harness silently runs that harness's default model. Whether the backend itself
+  is available is checked by the gateway when it spawns the seat (see Step 5), not here.
 
 ## Step 3 — Build each seat's task
 
@@ -142,6 +156,8 @@ Spawn **one `spawn_run` call per seat** (on `@kirocrew-core`) — one call each,
   conversation.
 - `agent=<seat.agent>` when the seat sets one, else `agent="kirocrew"` (the default full-toolset worker).
   Never leave the agent unnamed — an unnamed spawn inherits the read-only router and cannot do the work.
+- `backend=<seat.backend>` ONLY when the seat sets one. When it is omitted, pass no `backend` at all, so the
+  seat runs on the harness Kiro Crew itself uses.
 - `max_turns=8` — seats are bounded deliberation, not open-ended work.
 
 Issue all the per-seat `spawn_run` calls in the SAME turn so they run concurrently: the runtime fans them
@@ -153,8 +169,9 @@ before reducing; do not keep working in the same turn.
 batch has a per-task `agents[]` list but NO per-task `models[]` list, so it cannot carry per-seat models.)
 One call per seat is what gives each seat its own model.
 
-If (and only if) every seat in the panel happens to share the SAME model, a single `tasks[]` batch call is
-an acceptable optimization — but per-seat calls are always correct, so lead with those.
+If (and only if) every seat in the panel shares the SAME `model` AND the same `backend` (all omitted, or
+all the same value), a single `tasks[]` batch call is an acceptable optimization — but per-seat calls are
+always correct, so lead with those.
 
 ## Step 5 — Collect
 
@@ -165,7 +182,9 @@ When every seat's completion event arrives, extract per seat:
   that token. If a seat has no parseable `VERDICT:` line, mark it **unparseable** (do not guess a verdict).
 
 A seat whose spawn failed or timed out is a **failed** seat: record it and keep going — one bad voice is
-not an aborted panel.
+not an aborted panel. A spawn refused because the seat's `backend` is not available (the gateway answers
+`backend 'x' is not available; choose one of [...]`) is a failed seat too: report that message verbatim and
+apply the quorum rules as usual.
 
 ## Step 6 — Reduce by strategy
 
@@ -201,7 +220,8 @@ over the extracted tokens is fine and avoids arithmetic slips.
 - **rank (two-round Borda)** —
   - Round 1: the seats' Step 4 answers.
   - Round 2: for each seat, spawn a NEW `spawn_run` — one call per seat carrying that seat's own `model`
-    (not a batched `tasks[]` call, which cannot carry per-seat models), `include_memory=false` — that shows
+    and `backend` (when set), exactly as in round 1 (not a batched `tasks[]` call, which cannot carry
+    per-seat models), `include_memory=false` — that shows
     it the OTHER seats' answers anonymized (`Answer A: …`, `Answer B: …`, self-excluded) and asks it to
     rank them best-to-worst. Parse each ranking.
   - Aggregate with Borda scores (rank 1 = N−1 points, rank 2 = N−2, …), summed per answer. Report the
@@ -212,8 +232,9 @@ over the extracted tokens is fine and avoids arithmetic slips.
 Emit one clearly formatted result:
 
 - the panel name and `engine: native`,
-- each seat: `label`, `model`, its answer (truncate to ~500 chars if long), and its verdict token when the
-  strategy uses one,
+- each seat: `label`, `backend` (or "default" when omitted), the requested `model`, whether that model was
+  validated or **unvalidated** (Step 2), its answer (truncate to ~500 chars if long), and its verdict token
+  when the strategy uses one. Never present an unvalidated requested model as the model that actually ran,
 - the strategy result from Step 6,
 - any unparseable or failed seats, called out separately — never folded into the verdict silently.
 
@@ -222,7 +243,8 @@ Report honestly: if a seat failed or a quorum was missed, say so plainly.
 ## Native debate (multi-round)
 
 For a native debate — several voices arguing across rounds — open each voice's durable session in round
-one with its OWN `spawn_run(keep=true, model=<seat.model>)` — one call per voice, exactly as in Step 4,
+one with its OWN `spawn_run(keep=true, model=<seat.model>)` (plus `backend=<seat.backend>` when the seat
+sets one) — one call per voice, exactly as in Step 4,
 because a batched `tasks[]` call cannot carry per-seat models — then `spawn_continue` on each session for
 later rounds, showing each voice the others' latest positions and asking it to revise. This mirrors the MCP `debate` protocol
 (persistent sessions, one independent round then cross-review rounds). Support `track_convergence` by
@@ -262,6 +284,17 @@ Inline seats, no saved panel:
 User: Ask claude-sonnet-4.5, gpt-5.6, and deepseek-3.2 the same question in Kiro and take a majority.
 - Step 0: all three are model names (not CLI ids) + "in Kiro" -> native.
 - Build an in-memory panel: engine native, strategy majority, 3 seats. Then Steps 2–7 as above.
+```
+
+Mixed harnesses in one native panel (a per-seat `backend`):
+
+```
+User: Run the cross-harness-review native panel over the change in src/db/pool.py.
+- Step 0: saved native panel; its codex seat sets `backend: codex`, which is a harness, so still native.
+- Step 2: the seat with no backend is checked against kiro-cli --list-models; the codex seat's model is
+          marked unvalidated (the Kiro list cannot check it).
+- Step 4: spawn_run x2, one per seat; the codex seat also carries backend="codex", the other carries none.
+- Step 7: report each seat's backend, requested model and validation status next to its verdict.
 ```
 
 ## When to reach for a different skill

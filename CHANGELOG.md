@@ -4,6 +4,25 @@ All notable changes to this app are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-11-04
+
+### Added
+- Per-seat `backend` for native panels. A seat in `native-panels.toon` can now name the Kiro Crew harness it spawns on (for example `backend: codex`), so a native panel can reach models that exist in another harness but not in Kiro. Omit it and the seat runs on the harness Kiro Crew itself uses, exactly as in 3.0.0. The skill passes `backend` to that seat's `spawn_run` only when the seat sets it, including the `rank` second round and native debate sessions.
+- The Native Panels editor has a `backend` field on every seat, suggesting the harnesses the gateway reports today (`claude`, `codex`, `kas`, `kiro`). The model field offers Kiro model suggestions only for a seat on the default harness or `kiro`; on another backend it is plain free text.
+- `GET /rutherford-meta` returns `native_backends` and `native_backends_source`. The list is a static suggestion, not a live probe, and the source note says so.
+- A `cross-harness-review` starter panel in `examples/native-panels.toon`: one seat on Kiro Crew's own harness and one on `codex`.
+
+### Changed
+- The `native-panel` skill's model check (`kiro-cli chat --list-models`) now covers only seats with no `backend` or `backend: kiro`. A seat on another backend is reported as unvalidated, because the Kiro list cannot check another harness's model ids, and an unknown id there silently runs that harness's default model. The report shows each seat's backend, requested model and validation status, and never presents an unvalidated model as the one that ran.
+- A seat whose backend is not available fails at spawn time with the gateway's own message. It is a failed seat under the usual quorum rules, not a validation stop.
+- The skill and the orchestrator prompt say that a seat's `backend` is a harness, not a Rutherford ACP CLI id, so a saved native panel that sets it stays native. A bare `codex` or `kiro` named as a seat in a user's request still means the ACP CLI.
+- The Kiro model list in the 3.0.0 reference no longer claims to validate every seat's model; `reference/native-panels.md` documents `backend` and per-backend model ids.
+
+### Compatibility
+- A `native-panels.toon` without `backend` is unchanged byte for byte and still loads on 3.0.0.
+- The parser stays strict, and the `backend` value is not checked against a fixed list: the gateway owns the set of harnesses. An empty or non-string `backend` is a parse error, and `PUT /rutherford-native-panels` answers 400 for a non-string value.
+- A `native-panels.toon` that contains any `backend:` line does not load on 3.0.0. The strict parser rejects the whole file, so every panel in that scope disappears, not just the pinned one. In the 3.0.0 UI that scope shows a parse error and an empty list, and saving it replaces the file (the previous content is kept in the timestamped `.bak`). Remove the `backend:` lines before downgrading.
+
 ## [3.0.0] - 2026-09-18
 
 ### Added
@@ -109,6 +128,7 @@ Kiro Crew app format.
   install from a local checkout (`git clone` then `kirocrew app install <path>`) — both behind a trust
   grant.
 
+[3.1.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v3.1.0
 [3.0.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v3.0.0
 [2.2.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.2.0
 [2.1.0]: https://github.com/chapmanjw/rutherford-kiro-crew-app/releases/tag/v2.1.0

@@ -63,13 +63,23 @@ A native seat requires `model`; the rest default. Each seat becomes one `spawn_r
 
 | Key | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `model` | string | yes | — | The Kiro-spawnable model for this seat (e.g. `claude-sonnet-4.5`). This is the native seat's identity — there is no `cli`. Validated against `kiro-cli chat --list-models` at run time. |
+| `model` | string | yes | — | The model for this seat (e.g. `claude-sonnet-4.5`). This is the native seat's identity — there is no `cli`. Validated against `kiro-cli chat --list-models` at run time when the seat's `backend` is omitted or `kiro`; on any other backend it is not validated, and an unknown id silently runs that harness's default model. |
 | `role` | string | no | — | A ported native role (see [roles-native.md](roles-native.md)) whose prompt text is prepended to the seat task. Plain text, not a Rutherford role id. |
 | `label` | string | no | the model | The key this seat appears under in the result. |
 | `weight` | number ≥ 0 | no | `1` | Feeds the `weighted` strategy. |
 | `parity` | bool | no | `false` | Marks a seat as a parity counterweight (the `parity-pair` strategy). |
 | `stance` | string | no | — | `for` / `against` / `neutral` — steers this seat. |
 | `agent` | string | no | `kirocrew` | The Kiro Crew agent to spawn for this seat. Omit for the default full-toolset worker. |
+| `backend` | string | no | — | The Kiro Crew harness to spawn this seat on (added in v3.1.0), for example `codex`. Omit it and the seat runs on the harness Kiro Crew itself uses. The gateway owns the set of harnesses (today `claude`, `codex`, `kas`, `kiro`) and refuses an unavailable one when it spawns the seat, so the file does not restrict the value. A non-empty string is required when present. |
+
+### Pinning a seat to another harness
+
+`backend` lets a panel reach models that exist in another harness but not in Kiro. Model ids are per
+backend: a `backend: codex` seat takes a codex id such as `openai.gpt-6.1-sol`, not a Kiro id. On codex use
+the base id and pass the effort with `reasoning_effort` at run time; a bracketed suffix such as `[low]`
+does not apply the effort. A `backend` value is a harness, not a Rutherford ACP CLI id, so a native panel
+that sets it is still entirely native. An unavailable backend fails that one seat at spawn time with the
+gateway's own message, and the strategy's quorum rules apply as for any failed seat.
 
 ## How native seats differ from MCP seats
 
@@ -80,6 +90,7 @@ A native seat requires `model`; the rest default. Each seat becomes one `spawn_r
 | `role` | a Rutherford role id resolved by the server | plain prompt text from `roles-native.md`, prepended by the skill |
 | execution | an external ACP CLI launch via the MCP server | a `spawn_run` subagent inside Kiro Crew |
 | `agent` | n/a | optional Kiro Crew agent to spawn (default `kirocrew`) |
+| `backend` | n/a | optional Kiro Crew harness to spawn on (default: the harness Kiro Crew uses) |
 | `engine` | n/a | required, must be `native` |
 
 ## Strategies
@@ -137,10 +148,13 @@ never falls back to MCP. What fails at author time:
 - an unknown `strategy` or `stance`,
 - a negative or non-numeric `weight`,
 - a non-bool `parity`,
+- an empty or non-string `backend`,
 - an empty `targets` list.
 
-A model that is not in `kiro-cli chat --list-models` fails at run time with a clear message ("model 'X' is
-not available; use engine: mcp for external ACP agents") — again with no MCP fallback.
+A seat whose `backend` is omitted or `kiro` and whose model is not in `kiro-cli chat --list-models` fails
+at run time with a clear message ("model 'X' is not available; use engine: mcp for external ACP agents") —
+again with no MCP fallback. A seat on any other backend is reported as unvalidated instead, because the Kiro
+list cannot check it.
 
 ## Not ported
 
@@ -151,5 +165,5 @@ and per-seat `stance` are stored in the panel file (see [Schema](#schema)), whil
 [Run-time options](#run-time-options-not-stored-in-native-panelstoon)) — they are NOT stored in
 `native-panels.toon`.
 
-See [examples/native-panels.toon](../examples/native-panels.toon) for a ready-to-copy starter with three
+See [examples/native-panels.toon](../examples/native-panels.toon) for a ready-to-copy starter with four
 panels, and [roles-native.md](roles-native.md) for the built-in role prompt text native seats use.

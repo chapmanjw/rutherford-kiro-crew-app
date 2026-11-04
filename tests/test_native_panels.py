@@ -73,10 +73,73 @@ def expect_valueerror(label: str, fn) -> None:
 
 def test_example_roundtrip() -> None:
     text = EXAMPLE.read_text(encoding="utf-8")
-    check("example parses to 3 panels", len(np.parse(text)) == 3)
+    parsed = np.parse(text)
+    check("example parses to 4 panels", len(parsed) == 4)
+    cross = next((p for p in parsed if p["name"] == "cross-harness-review"), None)
+    check("example has the cross-harness-review panel", cross is not None)
+    backends = [s.get("backend") for s in (cross or {}).get("targets", [])]
+    check("cross-harness-review: one omitted backend, one codex", backends == [None, "codex"])
     check("serialize(parse(example)) == example byte-for-byte",
           np.serialize(np.parse(text)) == text)
     check("roundtrip_ok(example)", np.roundtrip_ok(text))
+
+
+# --------------------------------------------------------------------------
+# Seat ``backend`` (v3.1.0): the Kiro Crew harness a seat spawns on
+# --------------------------------------------------------------------------
+
+BACKEND = (
+    "native-panels:\n"
+    "  mixed:\n"
+    "    engine: native\n"
+    "    strategy: unanimous\n"
+    "    targets[2]:\n"
+    "      - model: claude-opus-5.5\n"
+    "      - model: openai.gpt-6.1-sol\n"
+    "        agent: kirocrew\n"
+    "        backend: codex\n"
+)
+
+
+def _backend_text(value_line: str) -> str:
+    return (
+        "native-panels:\n"
+        "  p:\n"
+        "    engine: native\n"
+        "    targets[1]:\n"
+        "      - model: m\n"
+        f"        {value_line}\n"
+    )
+
+
+def test_backend_seat_key() -> None:
+    parsed = np.parse(BACKEND)
+    seats = parsed[0]["targets"]
+    check("backend: omitted seat has no backend key", "backend" not in seats[0])
+    check("backend: codex parses to 'codex'", seats[1]["backend"] == "codex")
+    check("backend serialize(parse(x)) == x byte-for-byte (backend emitted after agent)",
+          np.serialize(parsed) == BACKEND)
+    check("backend roundtrip_ok", np.roundtrip_ok(BACKEND))
+    # A seat that never set backend serializes exactly as it did before v3.1.0.
+    old = "native-panels:\n  p:\n    engine: native\n    targets[1]:\n      - model: m\n        agent: kirocrew\n"
+    check("a seat without backend serializes unchanged", np.serialize(np.parse(old)) == old)
+    # Quoted value (a harness name needing quotes) survives the round trip.
+    quoted = _backend_text('backend: "a:b"')
+    check("quoted backend round-trips", np.serialize(np.parse(quoted)) == quoted)
+    # The value is NOT checked against a closed set: the gateway owns that.
+    check("an unlisted backend name still parses", np.parse(_backend_text("backend: some-new-harness"))[0]["targets"][0]["backend"] == "some-new-harness")
+    expect_valueerror("empty backend rejected", lambda: np.parse(_backend_text('backend: ""')))
+    expect_valueerror("whitespace-only backend rejected", lambda: np.parse(_backend_text('backend: "  "')))
+    expect_valueerror("numeric backend rejected", lambda: np.parse(_backend_text("backend: 123")))
+    expect_valueerror("boolean backend rejected", lambda: np.parse(_backend_text("backend: true")))
+    expect_valueerror(
+        "duplicate backend key rejected",
+        lambda: np.parse(_backend_text("backend: codex\n        backend: claude")),
+    )
+    # A non-string backend handed to serialize->parse (the atomic_write guard) fails
+    # the round trip instead of writing a file the strict parser would reject.
+    bad = [{"name": "p", "engine": "native", "targets": [{"model": "m", "backend": True}]}]
+    expect_valueerror("non-string backend fails the write round-trip", lambda: np.roundtrip_ok(np.serialize(bad)))
 
 
 # --------------------------------------------------------------------------
@@ -508,6 +571,7 @@ def test_atomic_write_and_bak() -> None:
 def main() -> int:
     for fn in (
         test_example_roundtrip,
+        test_backend_seat_key,
         test_edge_roundtrip,
         test_control_char_roundtrip,
         test_control_char_via_structured_input,

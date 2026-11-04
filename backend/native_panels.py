@@ -1,4 +1,4 @@
-"""Round-trip-safe TOON serializer/parser for ``native-panels.toon`` (v3.0.0).
+"""Round-trip-safe TOON serializer/parser for ``native-panels.toon`` (v3.0.0; seat ``backend`` v3.1.0).
 
 Native panels are the all-Kiro-Crew execution path added in v3: every seat is a
 Kiro Crew subagent (`spawn_run`, one model per seat), aggregation is done by the
@@ -14,8 +14,10 @@ count header, and ``- key: value`` seat rows) with three deliberate differences:
 1. The top-level key is ``native-panels:``, not ``panels:``.
 2. A native seat's required key is ``model`` (a Kiro-spawnable model name), NOT
    ``cli`` (a Rutherford ACP agent id). Native seats also add an optional
-   ``agent`` (the Kiro Crew agent to spawn, default ``kirocrew``); a panel adds
-   ``engine`` (MUST be ``native``) and an optional ``reduction``.
+   ``agent`` (the Kiro Crew agent to spawn, default ``kirocrew``) and an optional
+   ``backend`` (the Kiro Crew harness to spawn on, e.g. ``codex``; omitted means
+   the harness Kiro Crew itself uses); a panel adds ``engine`` (MUST be
+   ``native``) and an optional ``reduction``.
 3. Parsing is STRICT: an unknown panel key or an unknown seat key is a parse
    error (``panels.toon`` preserves unknown keys under ``extra``; native panels
    reject them, same posture the Rutherford panels LOADER takes at load time).
@@ -247,7 +249,9 @@ VALID_STANCES = ("for", "against", "neutral")
 _PANEL_KEYS = ("description", "engine", "strategy", "reduction", "targets")
 
 # Seat keys, in canonical emit order. ``model`` is REQUIRED; the rest default.
-_SEAT_KEYS = ("model", "role", "label", "weight", "parity", "stance", "agent")
+# ``backend`` (v3.1.0) is appended LAST so the emit order of every file written
+# before it existed is unchanged.
+_SEAT_KEYS = ("model", "role", "label", "weight", "parity", "stance", "agent", "backend")
 
 
 def _panel_error(name: str, msg: str) -> ValueError:
@@ -505,6 +509,16 @@ def _finalize_panel(panel: dict[str, Any]) -> None:
         parity = seat.get("parity")
         if parity is not None and not isinstance(parity, bool):
             raise _panel_error(name, f"seat [{i}] parity must be a boolean")
+        # ``backend`` names the Kiro Crew harness a seat spawns on. The VALUE is
+        # deliberately not checked against a closed set: the gateway owns the set
+        # of harnesses and refuses an unknown one at spawn time, so a hardcoded
+        # list here would only go stale. It must still be a non-empty string.
+        if "backend" in seat:
+            backend = seat["backend"]
+            if not isinstance(backend, str) or not backend.strip():
+                raise _panel_error(
+                    name, f"seat [{i}] backend must be a non-empty string"
+                )
 
 
 # --------------------------------------------------------------------------
@@ -516,7 +530,7 @@ def serialize(panels: list[dict[str, Any]]) -> str:
 
     Emits panel keys in the order ``description, engine, strategy, reduction``
     then the ``targets[N]:`` list, and seat keys in the order
-    ``model, role, label, weight, parity, stance, agent``. Byte-for-byte
+    ``model, role, label, weight, parity, stance, agent, backend``. Byte-for-byte
     reproduces a canonically-formatted file (the shipped example is canonical).
     """
     out: list[str] = ["native-panels:"]

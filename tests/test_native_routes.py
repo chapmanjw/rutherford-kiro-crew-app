@@ -208,6 +208,64 @@ def test_valid_roundtrip_global():
             check("GET round-trips seat weight", seat0.get("weight") == 2)
 
 
+def test_backend_seat_key():
+    with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as c:
+        home, cwd = Path(h), Path(c)
+        file = home / ".rutherford" / "native-panels.toon"
+        with scopes(home, cwd):
+            # Non-string backend values must be a 400 and write nothing: the coercing
+            # str() loop used for role/label/stance/agent would have turned them into
+            # the strings "True" / "{}" and let them through.
+            for label, bad in {
+                "bool": True,
+                "number": 7,
+                "list": ["codex"],
+                "object": {"name": "codex"},
+            }.items():
+                resp = put_panels("global", {"panels": [_panel(model="m", backend=bad)]})
+                check(f"non-string backend ({label}) -> 400", resp.status == 400)
+                check(f"non-string backend ({label}) does not report written", resp.body.get("written") is not True)
+            check("no file written after only-invalid backend PUTs", not file.exists())
+
+            # A blank backend is stripped; a valid one is trimmed and carried through.
+            resp = put_panels(
+                "global",
+                {"panels": [{
+                    "name": "mixed", "engine": "native", "strategy": "unanimous",
+                    "seats": [
+                        {"model": "claude-opus-5.5", "backend": "   "},
+                        {"model": "openai.gpt-6.1-sol", "backend": " codex "},
+                    ],
+                }]},
+            )
+            check("valid backend PUT -> 200", resp.status == 200)
+            text = file.read_text(encoding="utf-8")
+            check("blank backend stripped from the file", text.count("backend:") == 1)
+            check("backend written to the file", "        backend: codex\n" in text)
+            seats = next(p for p in resp.body["panels"] if p["name"] == "mixed")["seats"]
+            check("PUT echo: omitted backend stays absent", "backend" not in seats[0])
+            check("PUT echo carries backend", seats[1].get("backend") == "codex")
+            got = get_panels()
+            gseats = next(
+                p for s in got.body["sources"] if s["scope"] == "global"
+                for p in s["panels"] if p["name"] == "mixed"
+            )["seats"]
+            check("GET round-trips backend", gseats[1].get("backend") == "codex")
+
+
+def test_meta_offers_native_backends():
+    resp = _run(routes._handle_meta(FakeRequest(), _CTX))
+    check("meta -> 200", resp.status == 200)
+    check("meta lists native_backends", resp.body.get("native_backends") == ["claude", "codex", "kas", "kiro"])
+    note = str(resp.body.get("native_backends_source", ""))
+    check("meta says backends are not a live probe", "not a live probe" in note)
+    check("meta says the gateway checks at spawn time", "spawns the seat" in note)
+    check(
+        "meta says model suggestions are Kiro ids only",
+        "Kiro ids only" in str(resp.body.get("native_models_source", "")),
+    )
+
+
 def test_config_dir_scope_and_precedence():
     with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as c, tempfile.TemporaryDirectory() as g:
         home, cwd, cfg = Path(h), Path(c), Path(g)
@@ -355,6 +413,8 @@ def test_reread_failure_does_not_report_success_and_no_traceback_leak():
 def main() -> int:
     for fn in (
         test_valid_roundtrip_global,
+        test_backend_seat_key,
+        test_meta_offers_native_backends,
         test_config_dir_scope_and_precedence,
         test_dedup_when_home_equals_cwd,
         test_invalid_bodies_rejected_and_no_write,
